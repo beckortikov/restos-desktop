@@ -288,10 +288,9 @@ class SyncEngine {
     // Fast push loop (every 10 sec) — sends local changes to cloud quickly
     setInterval(async () => {
       try {
-        const res = await fetch(`${this.supabaseUrl}/rest/v1/`, {
-          method: 'HEAD',
+        const res = await fetch(`${this.supabaseUrl}/rest/v1/restaurants?limit=1`, {
           headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
-          signal: AbortSignal.timeout(3000),
+          signal: AbortSignal.timeout(5000),
         })
         if (res.ok) {
           await this.pushToCloud()
@@ -302,10 +301,9 @@ class SyncEngine {
     // Slower pull loop (every 60 sec) — pulls reference data updates from cloud
     setInterval(async () => {
       try {
-        const res = await fetch(`${this.supabaseUrl}/rest/v1/`, {
-          method: 'HEAD',
+        const res = await fetch(`${this.supabaseUrl}/rest/v1/restaurants?limit=1`, {
           headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
-          signal: AbortSignal.timeout(3000),
+          signal: AbortSignal.timeout(5000),
         })
         if (res.ok) {
           await this.pullFromCloud()
