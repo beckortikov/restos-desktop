@@ -90,16 +90,30 @@ function setupAutoUpdater() {
     autoUpdater.on('update-downloaded', (info) => {
       console.log('[updater] Update downloaded:', info.version)
       mainWindow?.webContents.send('update-status', { status: 'ready', version: info.version })
-      // Inject update banner into page
-      mainWindow?.webContents.executeJavaScript(`
-        if (!document.getElementById('restos-update-bar')) {
-          const bar = document.createElement('div');
-          bar.id = 'restos-update-bar';
-          bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1d4ed8;color:#fff;padding:8px 16px;font-family:system-ui;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;';
-          bar.innerHTML = 'Обновление v${info.version} готово <button onclick="window.restosDesktop.installUpdate()" style="background:#fff;color:#1d4ed8;border:none;padding:4px 12px;border-radius:4px;font-weight:600;cursor:pointer;font-size:13px;">Перезагрузить</button>';
-          document.body.prepend(bar);
-        }
-      `).catch(() => {})
+
+      // Check if this is a critical update (release notes contain [CRITICAL])
+      const isCritical = (info.releaseNotes || '').toString().includes('[CRITICAL]')
+
+      if (isCritical) {
+        // Force update — block the app until restart
+        console.log('[updater] CRITICAL update — forcing restart')
+        mainWindow?.webContents.executeJavaScript(`
+          document.body.innerHTML = '<div style="position:fixed;inset:0;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;font-family:system-ui;z-index:999999"><div style="text-align:center"><h1 style="font-size:24px;margin-bottom:12px">Критическое обновление v${info.version}</h1><p style="color:#a1a1aa;margin-bottom:24px">Требуется перезагрузка для продолжения работы</p><button onclick="window.restosDesktop.installUpdate()" style="background:#3b82f6;color:#fff;border:none;padding:12px 32px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer">Перезагрузить сейчас</button></div></div>';
+        `).catch(() => {})
+        // Auto-restart after 30 seconds if user doesn't click
+        setTimeout(() => autoUpdater.quitAndInstall(), 30000)
+      } else {
+        // Normal update — show banner
+        mainWindow?.webContents.executeJavaScript(`
+          if (!document.getElementById('restos-update-bar')) {
+            const bar = document.createElement('div');
+            bar.id = 'restos-update-bar';
+            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1d4ed8;color:#fff;padding:8px 16px;font-family:system-ui;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;';
+            bar.innerHTML = 'Обновление v${info.version} готово <button onclick="window.restosDesktop.installUpdate()" style="background:#fff;color:#1d4ed8;border:none;padding:4px 12px;border-radius:4px;font-weight:600;cursor:pointer;font-size:13px;">Перезагрузить</button>';
+            document.body.prepend(bar);
+          }
+        `).catch(() => {})
+      }
     })
     autoUpdater.on('error', (err) => {
       console.log('[updater] Error:', err.message)

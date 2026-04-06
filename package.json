@@ -9,7 +9,8 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac"
+    "dist:mac": "electron-builder --mac",
+    "release": "cd ../restos && npx vite build && cd ../restos-desktop && rm -rf frontend && cp -r ../restos/dist frontend && git add -A && git commit -m \"update: new release\" && git push"
   },
   "build": {
     "appId": "tj.restos.pos",
