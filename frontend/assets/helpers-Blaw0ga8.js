@@ -1,0 +1,1 @@
+function e(e){return new Intl.NumberFormat(`ru-RU`,{style:`decimal`,maximumFractionDigits:0,useGrouping:!0}).format(e)+` TJS`}function t(e){return new Date(e).toLocaleTimeString(`ru`,{hour:`2-digit`,minute:`2-digit`})}function n(e){let t=Date.now()-new Date(e).getTime(),n=Math.floor(t/6e4);return n<60?`${n} мин`:`${Math.floor(n/60)}ч ${n%60}мин`}export{t as n,n as r,e as t};
