@@ -1,17 +1,24 @@
 const { getDB } = require('./db')
 const os = require('os')
 
-// Tables to PULL from cloud (reference data + historical)
+// Tables to PULL from cloud (reference/config data ONLY)
+// Operational data (orders, tables, shifts) is managed locally and pushed to cloud — NOT pulled periodically
 const PULL_TABLES = [
-  'restaurants', 'users', 'zones', 'tables', 'menu_items', 'tech_card_lines',
+  'restaurants', 'users', 'zones', 'menu_items', 'tech_card_lines',
   'ingredients', 'financial_accounts', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
-  'suppliers', 'customers', 'orders', 'order_items', 'order_item_modifiers',
+  'suppliers', 'customers',
+  'assets', 'liabilities', 'equity', 'budget_lines',
+]
+
+// Additional tables pulled ONLY on first sync (activation) — not periodic
+const INITIAL_PULL_TABLES = [
+  ...PULL_TABLES,
+  'tables', 'orders', 'order_items', 'order_item_modifiers',
   'cash_shifts', 'cash_shift_operations', 'reservations',
   'financial_operations', 'stock_movements', 'stock_receipts', 'stock_receipt_lines',
   'order_voids', 'order_splits', 'stock_writeoffs', 'writeoff_lines',
-  'batch_cooking_logs', 'supply_expenses', 'time_entries',
-  'assets', 'liabilities', 'equity', 'budget_lines', 'audit_log',
+  'batch_cooking_logs', 'supply_expenses', 'time_entries', 'audit_log',
 ]
 
 // Tables to PUSH to cloud (data created/modified locally)
@@ -107,14 +114,15 @@ class SyncEngine {
 
   // ─── PULL: Cloud → Local ──────────────────────────────────────────────────
 
-  async pullFromCloud() {
+  async pullFromCloud(initial = false) {
     if (this.syncing) return
     this.syncing = true
-    console.log('[sync] Pulling from cloud...')
+    console.log(`[sync] Pulling from cloud${initial ? ' (initial)' : ''}...`)
     const db = getDB()
+    const tablesToPull = initial ? INITIAL_PULL_TABLES : PULL_TABLES
 
     try {
-      for (const table of PULL_TABLES) {
+      for (const table of tablesToPull) {
         try {
           const filterCol = table === 'restaurants' ? 'id' : 'restaurant_id'
           // For tables without restaurant_id (tech_card_lines, etc), skip filter

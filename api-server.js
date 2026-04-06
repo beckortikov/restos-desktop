@@ -347,7 +347,7 @@ h1{font-size:20px;margin-bottom:8px}p{color:#a1a1aa;font-size:14px;margin-bottom
         onBlocked: (reason) => { isBlocked = true; blockReason = reason; onBlockedCallback?.(reason) },
         onUnblocked: () => { isBlocked = false; blockReason = ''; onUnblockedCallback?.() },
       })
-      await sync.pullFromCloud()
+      await sync.pullFromCloud(true) // initial pull — all tables including operational
       sync.start()
       res.json({ success: true, restaurantName: data[0].name })
     } catch (err) { res.status(500).json({ error: err.message }) }
