@@ -30,6 +30,7 @@ async function initDB() {
       enforce_stock_check BOOLEAN DEFAULT false,
       local_server_ip TEXT,
       license_key TEXT,
+      license_expires_at TIMESTAMPTZ,
       is_blocked BOOLEAN DEFAULT false,
       block_reason TEXT,
       last_seen_at TIMESTAMPTZ,

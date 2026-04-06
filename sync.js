@@ -76,15 +76,26 @@ class SyncEngine {
     try {
       const db = getDB()
       const result = await db.query(
-        'SELECT is_blocked, block_reason FROM restaurants WHERE id = $1',
+        'SELECT is_blocked, block_reason, license_expires_at FROM restaurants WHERE id = $1',
         [this.restaurantId]
       )
       const row = result.rows[0]
-      if (row && (row.is_blocked === true || row.is_blocked === 'true')) {
+      if (!row) return
+
+      // Check if explicitly blocked
+      const isBlocked = row.is_blocked === true || row.is_blocked === 'true'
+
+      // Check if license expired
+      const isExpired = row.license_expires_at && new Date(row.license_expires_at) < new Date()
+
+      if (isBlocked || isExpired) {
+        const reason = isExpired
+          ? `Лицензия истекла ${new Date(row.license_expires_at).toLocaleDateString('ru')}. Обратитесь к администратору для продления.`
+          : (row.block_reason || '')
         if (!this.wasBlocked) {
           this.wasBlocked = true
-          console.log('[sync] License BLOCKED:', row.block_reason)
-          if (this.onBlocked) this.onBlocked(row.block_reason || '')
+          console.log('[sync] License BLOCKED:', reason)
+          if (this.onBlocked) this.onBlocked(reason)
         }
       } else if (this.wasBlocked) {
         this.wasBlocked = false
