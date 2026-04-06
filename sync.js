@@ -290,7 +290,7 @@ class SyncEngine {
       try {
         const res = await fetch(`${this.supabaseUrl}/rest/v1/`, {
           method: 'HEAD',
-          headers: { apikey: this.supabaseKey },
+          headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
           signal: AbortSignal.timeout(3000),
         })
         if (res.ok) {
@@ -304,7 +304,7 @@ class SyncEngine {
       try {
         const res = await fetch(`${this.supabaseUrl}/rest/v1/`, {
           method: 'HEAD',
-          headers: { apikey: this.supabaseKey },
+          headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
           signal: AbortSignal.timeout(3000),
         })
         if (res.ok) {
