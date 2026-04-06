@@ -74,6 +74,28 @@ async function startAPIServer(port = 3001) {
 
   await initDB()
 
+  // ─── SSE: real-time notifications to all connected clients ────────────
+  const sseClients = new Set()
+
+  app.get('/events', (req, res) => {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+    })
+    res.write('data: {"type":"connected"}\n\n')
+    sseClients.add(res)
+    req.on('close', () => sseClients.delete(res))
+  })
+
+  function notifyClients(tableName, action) {
+    const msg = `data: ${JSON.stringify({ type: 'change', table: tableName, action, ts: Date.now() })}\n\n`
+    for (const client of sseClients) {
+      try { client.write(msg) } catch { sseClients.delete(client) }
+    }
+  }
+
   // Serve frontend static assets (JS, CSS, images) but NOT index.html
   // index.html is handled by the SPA fallback which checks activation status
   const frontendDir = path.join(__dirname, 'frontend')
@@ -157,6 +179,7 @@ async function startAPIServer(port = 3001) {
         const result = await db.query(sql, cols.map(c => row[c] ?? null))
         results.push(result.rows[0])
       }
+      notifyClients(table, 'insert')
       res.status(201).json(Array.isArray(req.body) ? results : results[0])
     } catch (err) {
       console.error(`[POST] ${table} error:`, err.message)
@@ -176,6 +199,7 @@ async function startAPIServer(port = 3001) {
       const setClause = cols.map((c, i) => `"${c}" = $${params.length + i + 1}`).join(', ')
       const sql = `UPDATE "${table}" SET ${setClause}${where} RETURNING *`
       const result = await db.query(sql, [...params, ...cols.map(c => data[c] ?? null)])
+      notifyClients(table, 'update')
       if ((req.headers.prefer || '').includes('return=representation')) {
         res.json(result.rows.length === 1 ? result.rows[0] : result.rows)
       } else {
@@ -195,6 +219,7 @@ async function startAPIServer(port = 3001) {
       const db = getDB()
       const { where, params } = parseFilters(req.query)
       await db.query(`DELETE FROM "${table}"${where}`, params)
+      notifyClients(table, 'delete')
       res.json({ count: 1 })
     } catch (err) {
       console.error(`[DELETE] ${table} error:`, err.message)
