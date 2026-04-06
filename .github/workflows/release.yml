@@ -1,0 +1,78 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'README.md'
+      - '.gitignore'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Build frontend from restos repo
+      - name: Checkout frontend repo
+        uses: actions/checkout@v4
+        with:
+          repository: beckortikov/restos
+          path: restos-frontend
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Build frontend
+        run: |
+          cd restos-frontend
+          npm ci
+          npx vite build
+          cd ..
+
+      - name: Copy frontend to Electron
+        shell: bash
+        run: |
+          rm -rf frontend
+          cp -r restos-frontend/dist frontend
+
+      # Install Electron dependencies
+      - name: Install dependencies
+        run: npm ci
+
+      # Auto-increment version based on commit count
+      - name: Set version
+        shell: bash
+        run: |
+          VERSION=$(node -e "const p=require('./package.json'); const [maj,min]=p.version.split('.'); console.log(maj+'.'+min+'.${{ github.run_number }}')")
+          node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json')); p.version='${VERSION}'; fs.writeFileSync('package.json',JSON.stringify(p,null,2))"
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "Building version ${VERSION}"
+
+      # Build
+      - name: Build Electron (${{ matrix.platform }})
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npx electron-builder --${{ matrix.platform }} --publish always
+
+      # Upload artifacts (backup)
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: RestOS-${{ matrix.platform }}-${{ env.VERSION }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.yml
+          retention-days: 30
