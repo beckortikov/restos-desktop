@@ -243,6 +243,7 @@ class SyncEngine {
 
         // Upsert to Supabase (POST with on_conflict)
         // Supabase PostgREST supports upsert via Prefer: resolution=merge-duplicates
+        let allBatchesOk = true
         const batchSize = 100
         for (let i = 0; i < rows.length; i += batchSize) {
           const batch = rows.slice(i, i + batchSize).map(row => {
@@ -260,33 +261,53 @@ class SyncEngine {
             return clean
           })
 
-          try {
-            const res = await fetch(`${this.supabaseUrl}/rest/v1/${table}`, {
-              method: 'POST',
-              headers: {
-                apikey: this.supabaseKey,
-                Authorization: `Bearer ${this.supabaseKey}`,
-                'Content-Type': 'application/json',
-                Prefer: 'resolution=merge-duplicates',
-              },
-              body: JSON.stringify(batch),
-            })
-            if (!res.ok) {
-              const err = await res.text()
-              console.error(`  [push] ${table} batch failed:`, err.slice(0, 200))
+          // Try push, on schema error retry without the unknown column
+          let attempt = 0
+          let currentBatch = batch
+          let batchOk = false
+          while (attempt < 5) {
+            try {
+              const res = await fetch(`${this.supabaseUrl}/rest/v1/${table}`, {
+                method: 'POST',
+                headers: {
+                  apikey: this.supabaseKey,
+                  Authorization: `Bearer ${this.supabaseKey}`,
+                  'Content-Type': 'application/json',
+                  Prefer: 'resolution=merge-duplicates',
+                },
+                body: JSON.stringify(currentBatch),
+              })
+              if (res.ok) { batchOk = true; break }
+              const errText = await res.text()
+              // Detect missing column error and remove it from all rows, then retry
+              const m = errText.match(/Could not find the '([^']+)' column/)
+              if (m && attempt < 4) {
+                const badCol = m[1]
+                console.log(`  [push] ${table}: removing unknown column '${badCol}' and retrying`)
+                currentBatch = currentBatch.map(r => { const c = { ...r }; delete c[badCol]; return c })
+                attempt++
+                continue
+              }
+              console.error(`  [push] ${table} batch failed:`, errText.slice(0, 200))
+              break
+            } catch (err) {
+              console.error(`  [push] ${table} network error:`, err.message)
+              break
             }
-          } catch (err) {
-            console.error(`  [push] ${table} network error:`, err.message)
           }
+          if (!batchOk) allBatchesOk = false
         }
 
-        // Update sync timestamp
-        await db.query(
-          `INSERT INTO sync_meta (table_name, last_synced_at) VALUES ($1, now()) ON CONFLICT (table_name) DO UPDATE SET last_synced_at = now()`,
-          [table]
-        )
-
-        console.log(`  [push] ${table}: ${rows.length} rows`)
+        // Update sync timestamp ONLY if all batches succeeded
+        if (allBatchesOk) {
+          await db.query(
+            `INSERT INTO sync_meta (table_name, last_synced_at) VALUES ($1, now()) ON CONFLICT (table_name) DO UPDATE SET last_synced_at = now()`,
+            [table]
+          )
+          console.log(`  [push] ${table}: ${rows.length} rows ✓`)
+        } else {
+          console.log(`  [push] ${table}: failed, will retry`)
+        }
       } catch (err) {
         console.error(`  [push] ${table} error:`, err.message)
       }

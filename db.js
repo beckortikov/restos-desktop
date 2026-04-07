@@ -28,6 +28,8 @@ async function initDB() {
       service_percent NUMERIC DEFAULT 10,
       timezone TEXT DEFAULT 'Asia/Dushanbe',
       enforce_stock_check BOOLEAN DEFAULT false,
+      auto_ready_mode BOOLEAN DEFAULT false,
+      auto_ready_buffer_min INTEGER DEFAULT 5,
       local_server_ip TEXT,
       license_key TEXT,
       license_expires_at TIMESTAMPTZ,
@@ -153,6 +155,7 @@ async function initDB() {
       shift_id TEXT,
       restaurant_id TEXT,
       ready_at TIMESTAMPTZ,
+      expected_ready_at TIMESTAMPTZ,
       closed_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
