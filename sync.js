@@ -1,24 +1,31 @@
 const { getDB } = require('./db')
 const os = require('os')
 
-// Tables to PULL from cloud (reference/config data ONLY)
-// Operational data (orders, tables, shifts) is managed locally and pushed to cloud — NOT pulled periodically
+// Tables to PULL from cloud — both reference data AND operational data.
+// Operational tables (orders, tables, shifts) need bidirectional sync so multiple
+// desktops/devices stay consistent. Conflict resolution via EXCLUDED.updated_at >
+// local.updated_at (see pullFromCloud) prevents overwriting local newer changes.
 const PULL_TABLES = [
+  // Reference/config data
   'restaurants', 'users', 'zones', 'menu_items', 'tech_card_lines',
   'ingredients', 'financial_accounts', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
   'suppliers', 'customers',
   'assets', 'liabilities', 'equity', 'budget_lines',
-]
-
-// Additional tables pulled ONLY on first sync (activation) — not periodic
-const INITIAL_PULL_TABLES = [
-  ...PULL_TABLES,
+  // Operational data (multi-device sync)
   'tables', 'orders', 'order_items', 'order_item_modifiers',
   'cash_shifts', 'cash_shift_operations', 'reservations',
-  'financial_operations', 'stock_movements', 'stock_receipts', 'stock_receipt_lines',
-  'order_voids', 'order_splits', 'stock_writeoffs', 'writeoff_lines',
-  'batch_cooking_logs', 'supply_expenses', 'time_entries', 'audit_log',
+  'financial_operations', 'stock_movements',
+  'order_voids', 'order_splits',
+  'batch_cooking_logs', 'supply_expenses', 'time_entries',
+]
+
+// On first activation we also pull historical/append-only tables
+const INITIAL_PULL_TABLES = [
+  ...PULL_TABLES,
+  'stock_receipts', 'stock_receipt_lines',
+  'stock_writeoffs', 'writeoff_lines',
+  'audit_log',
 ]
 
 // Tables to PUSH to cloud (data created/modified locally)
@@ -127,7 +134,7 @@ class SyncEngine {
         try {
           const filterCol = table === 'restaurants' ? 'id' : 'restaurant_id'
           // For tables without restaurant_id (tech_card_lines, etc), skip filter
-          const noRestFilter = ['tech_card_lines', 'semi_recipe_lines', 'order_item_modifiers', 'stock_receipt_lines', 'writeoff_lines', 'modifiers', 'cash_shift_operations']
+          const noRestFilter = ['tech_card_lines', 'semi_recipe_lines', 'order_items', 'order_item_modifiers', 'stock_receipt_lines', 'writeoff_lines', 'modifiers', 'cash_shift_operations']
           let url
           if (noRestFilter.includes(table)) {
             // These are child tables — pull all (they link via parent FK)
