@@ -170,9 +170,17 @@ async function startAPIServer(port = 3001) {
     try {
       const db = getDB()
       const data = Array.isArray(req.body) ? req.body : [req.body]
+      // Check if table has updated_at column
+      let hasUpdatedAt = false
+      try {
+        const colCheck = await db.query(`SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = 'updated_at'`, [table])
+        hasUpdatedAt = colCheck.rows.length > 0
+      } catch {}
+      const now = new Date().toISOString()
       const results = []
       for (const row of data) {
         if (!row.id) row.id = require('crypto').randomUUID()
+        if (hasUpdatedAt && row.updated_at === undefined) row.updated_at = now
         const cols = Object.keys(row)
         const vals = cols.map((_, i) => `$${i + 1}`)
         const sql = `INSERT INTO "${table}" (${cols.map(c => `"${c}"`).join(',')}) VALUES (${vals.join(',')}) RETURNING *`
@@ -194,7 +202,14 @@ async function startAPIServer(port = 3001) {
     try {
       const db = getDB()
       const { where, params } = parseFilters(req.query)
-      const data = req.body
+      const data = { ...req.body }
+      // Auto-set updated_at if table has it (for sync conflict resolution)
+      try {
+        const colCheck = await db.query(`SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = 'updated_at'`, [table])
+        if (colCheck.rows.length > 0 && data.updated_at === undefined) {
+          data.updated_at = new Date().toISOString()
+        }
+      } catch {}
       const cols = Object.keys(data)
       const setClause = cols.map((c, i) => `"${c}" = $${params.length + i + 1}`).join(', ')
       const sql = `UPDATE "${table}" SET ${setClause}${where} RETURNING *`

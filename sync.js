@@ -28,7 +28,8 @@ const PUSH_TABLES = [
   'financial_operations', 'stock_movements',
   'order_voids', 'order_splits',
   'reservations', 'customers',
-  'tables', 'ingredients',
+  'tables', 'ingredients', 'menu_items', 'tech_card_lines',
+  'zones', 'modifier_groups', 'modifiers',
   'stock_receipts', 'stock_receipt_lines',
   'stock_writeoffs', 'writeoff_lines',
   'batch_cooking_logs', 'supply_expenses', 'time_entries',
@@ -157,7 +158,8 @@ class SyncEngine {
             }
           }
 
-          // Upsert each row
+          // Upsert each row — but DON'T overwrite if local version is newer (last-write-wins by updated_at)
+          const hasUpdatedAt = columns.includes('updated_at')
           for (const row of rows) {
             const vals = columns.map(c => {
               const v = row[c]
@@ -169,9 +171,14 @@ class SyncEngine {
             const colList = columns.map(c => `"${c}"`).join(',')
             const updateList = columns.filter(c => c !== 'id').map(c => `"${c}" = EXCLUDED."${c}"`).join(',')
 
+            // If table has updated_at, only update if cloud's version is newer than local
+            const conflictCondition = hasUpdatedAt
+              ? ` WHERE EXCLUDED.updated_at > "${table}".updated_at`
+              : ''
+
             try {
               await db.query(
-                `INSERT INTO "${table}" (${colList}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateList}`,
+                `INSERT INTO "${table}" (${colList}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateList}${conflictCondition}`,
                 vals
               )
             } catch (e) {
