@@ -99,6 +99,9 @@ async function initDB() {
       station TEXT DEFAULT 'hot_kitchen',
       is_batch_cooking BOOLEAN DEFAULT false,
       prepared_qty INTEGER DEFAULT 0,
+      unit TEXT DEFAULT 'piece',
+      unit_size NUMERIC DEFAULT 1,
+      sale_step NUMERIC DEFAULT 0,
       restaurant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
@@ -166,9 +169,11 @@ async function initDB() {
       order_id UUID,
       menu_item_id UUID,
       name TEXT,
-      qty INTEGER DEFAULT 1,
+      qty NUMERIC DEFAULT 1,
       price NUMERIC DEFAULT 0,
       cogs NUMERIC DEFAULT 0,
+      unit TEXT DEFAULT 'piece',
+      unit_size NUMERIC DEFAULT 1,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
     );
