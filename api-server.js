@@ -67,6 +67,14 @@ const TABLES = [
   'budget_lines', 'audit_log',
 ]
 
+// Desktop control state — populated by main.js via setDesktopHandlers
+let desktopHandlers = {
+  checkUpdate: null,
+  installUpdate: null,
+  openConnect: null,
+}
+let updateState = { status: 'idle', version: null, percent: 0, error: null }
+
 async function startAPIServer(port = 3001) {
   const app = express()
   app.use(cors())
@@ -368,6 +376,52 @@ h1{font-size:20px;margin-bottom:8px}p{color:#a1a1aa;font-size:14px;margin-bottom
     } catch (err) { res.status(500).json({ error: err.message }) }
   })
 
+  // ─── Desktop control endpoints ─────────────────────────────────────────────
+  // Only allow from localhost
+  function isLocalhost(req) {
+    const host = req.headers.host || ''
+    return host.startsWith('localhost') || host.startsWith('127.0.0.1')
+  }
+
+  app.get('/desktop/update-status', (req, res) => {
+    res.json(updateState)
+  })
+
+  app.post('/desktop/check-update', async (req, res) => {
+    if (!isLocalhost(req)) return res.status(403).json({ error: 'forbidden' })
+    if (!desktopHandlers.checkUpdate) return res.status(503).json({ error: 'unavailable' })
+    try {
+      updateState = { status: 'checking', version: null, percent: 0, error: null }
+      const result = await desktopHandlers.checkUpdate()
+      res.json({ ok: true, result })
+    } catch (e) {
+      updateState = { ...updateState, status: 'error', error: e.message }
+      res.status(500).json({ error: e.message })
+    }
+  })
+
+  app.post('/desktop/install-update', (req, res) => {
+    if (!isLocalhost(req)) return res.status(403).json({ error: 'forbidden' })
+    if (!desktopHandlers.installUpdate) return res.status(503).json({ error: 'unavailable' })
+    try {
+      desktopHandlers.installUpdate()
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ error: e.message })
+    }
+  })
+
+  app.post('/desktop/open-connect', (req, res) => {
+    if (!isLocalhost(req)) return res.status(403).json({ error: 'forbidden' })
+    if (!desktopHandlers.openConnect) return res.status(503).json({ error: 'unavailable' })
+    try {
+      desktopHandlers.openConnect()
+      res.json({ ok: true })
+    } catch (e) {
+      res.status(500).json({ error: e.message })
+    }
+  })
+
   // Activation & blocked pages
   const activatePage = path.join(__dirname, 'activate.html')
   const blockedPage = path.join(__dirname, 'blocked.html')
@@ -451,4 +505,12 @@ function getLocalIP() {
   return '127.0.0.1'
 }
 
-module.exports = { startAPIServer }
+function setDesktopHandlers(handlers) {
+  desktopHandlers = { ...desktopHandlers, ...handlers }
+}
+
+function setUpdateState(state) {
+  updateState = { ...updateState, ...state }
+}
+
+module.exports = { startAPIServer, setDesktopHandlers, setUpdateState }

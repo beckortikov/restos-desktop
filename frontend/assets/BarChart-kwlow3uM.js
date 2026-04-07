@@ -1,0 +1,1 @@
+import{f as e,n as t,p as n,r,t as i}from"./generateCategoricalChart-Ceyt3pya.js";var a=i({chartName:`BarChart`,GraphicalChild:n,defaultTooltipEventType:`axis`,validateTooltipEventTypes:[`axis`,`item`],axisComponents:[{axisType:`xAxis`,AxisComp:r},{axisType:`yAxis`,AxisComp:t}],formatAxisMap:e});export{a as t};

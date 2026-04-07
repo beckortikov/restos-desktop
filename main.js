@@ -1,6 +1,6 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain } = require('electron')
 const path = require('path')
-const { startAPIServer } = require('./api-server')
+const { startAPIServer, setDesktopHandlers, setUpdateState } = require('./api-server')
 
 let mainWindow = null
 let tray = null
@@ -74,21 +74,32 @@ function createTray() {
 }
 
 // Auto-updater with IPC events
+let autoUpdaterRef = null
 function setupAutoUpdater() {
   try {
     const { autoUpdater } = require('electron-updater')
+    autoUpdaterRef = autoUpdater
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
 
+    autoUpdater.on('checking-for-update', () => {
+      setUpdateState({ status: 'checking', version: null, percent: 0, error: null })
+    })
+    autoUpdater.on('update-not-available', () => {
+      setUpdateState({ status: 'not-available' })
+    })
     autoUpdater.on('update-available', (info) => {
       console.log('[updater] Update available:', info.version)
+      setUpdateState({ status: 'available', version: info.version })
       mainWindow?.webContents.send('update-status', { status: 'downloading', version: info.version })
     })
     autoUpdater.on('download-progress', (progress) => {
+      setUpdateState({ status: 'downloading', percent: Math.round(progress.percent) })
       mainWindow?.webContents.send('update-status', { status: 'progress', percent: Math.round(progress.percent) })
     })
     autoUpdater.on('update-downloaded', (info) => {
       console.log('[updater] Update downloaded:', info.version)
+      setUpdateState({ status: 'ready', version: info.version, percent: 100 })
       mainWindow?.webContents.send('update-status', { status: 'ready', version: info.version })
 
       // Check if this is a critical update (release notes contain [CRITICAL])
@@ -117,6 +128,7 @@ function setupAutoUpdater() {
     })
     autoUpdater.on('error', (err) => {
       console.log('[updater] Error:', err.message)
+      setUpdateState({ status: 'error', error: err.message })
     })
 
     // IPC: install update now
@@ -152,6 +164,21 @@ app.whenReady().then(async () => {
   createWindow()
   createTray()
   setupAutoUpdater()
+
+  // Register desktop control handlers (called by api-server /desktop/* routes)
+  setDesktopHandlers({
+    checkUpdate: async () => {
+      if (!autoUpdaterRef) throw new Error('Updater unavailable')
+      return await autoUpdaterRef.checkForUpdates()
+    },
+    installUpdate: () => {
+      if (!autoUpdaterRef) throw new Error('Updater unavailable')
+      autoUpdaterRef.quitAndInstall()
+    },
+    openConnect: () => {
+      shell.openExternal(`http://localhost:${API_PORT}/connect`)
+    },
+  })
 })
 
 app.on('window-all-closed', () => {
