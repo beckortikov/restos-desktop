@@ -63,7 +63,7 @@ const TABLES = [
   'order_voids', 'order_splits', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
   'stock_writeoffs', 'writeoff_lines', 'batch_cooking_logs',
-  'supply_expenses', 'time_entries', 'assets', 'liabilities', 'equity',
+  'supply_expenses', 'time_entries', 'assets', 'liabilities', 'equity_entries',
   'budget_lines', 'audit_log',
 ]
 
@@ -171,6 +171,25 @@ async function startAPIServer(port = 3001) {
     }
   })
 
+  // Helper: ensure all columns from `row` exist on `table`. Auto-creates missing columns as TEXT.
+  async function ensureColumns(db, table, row) {
+    try {
+      const colCheck = await db.query(
+        `SELECT column_name FROM information_schema.columns WHERE table_name = $1`,
+        [table]
+      )
+      const existing = new Set(colCheck.rows.map(r => r.column_name))
+      for (const col of Object.keys(row)) {
+        if (!existing.has(col)) {
+          try {
+            await db.query(`ALTER TABLE "${table}" ADD COLUMN "${col}" TEXT`)
+            console.log(`[schema] +${table}.${col}`)
+          } catch (e) { /* ignore */ }
+        }
+      }
+    } catch {}
+  }
+
   // POST
   app.post('/rest/v1/:table', async (req, res) => {
     const table = req.params.table
@@ -178,6 +197,8 @@ async function startAPIServer(port = 3001) {
     try {
       const db = getDB()
       const data = Array.isArray(req.body) ? req.body : [req.body]
+      // Auto-create missing columns based on first row keys
+      if (data.length > 0) await ensureColumns(db, table, data[0])
       // Check if table has updated_at column
       let hasUpdatedAt = false
       try {
@@ -211,6 +232,8 @@ async function startAPIServer(port = 3001) {
       const db = getDB()
       const { where, params } = parseFilters(req.query)
       const data = { ...req.body }
+      // Auto-create missing columns
+      await ensureColumns(db, table, data)
       // Auto-set updated_at if table has it (for sync conflict resolution)
       try {
         const colCheck = await db.query(`SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = 'updated_at'`, [table])

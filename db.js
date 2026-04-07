@@ -55,6 +55,8 @@ async function initDB() {
       station TEXT,
       shift_number INTEGER,
       salary NUMERIC DEFAULT 0,
+      advance NUMERIC DEFAULT 0,
+      deductions NUMERIC DEFAULT 0,
       permissions JSONB,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
@@ -455,34 +457,41 @@ async function initDB() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT,
       category TEXT,
-      value NUMERIC DEFAULT 0,
+      amount NUMERIC DEFAULT 0,
       purchase_date TEXT,
-      depreciation_rate NUMERIC DEFAULT 0,
+      useful_life_months INTEGER,
+      note TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS liabilities (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT,
-      type TEXT,
+      category TEXT,
       total_amount NUMERIC DEFAULT 0,
+      paid_amount NUMERIC DEFAULT 0,
       remaining_amount NUMERIC DEFAULT 0,
-      monthly_payment NUMERIC DEFAULT 0,
+      creditor TEXT,
       due_date TEXT,
+      monthly_payment NUMERIC DEFAULT 0,
+      interest_rate NUMERIC,
+      note TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
-    CREATE TABLE IF NOT EXISTS equity (
+    CREATE TABLE IF NOT EXISTS equity_entries (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT,
-      type TEXT,
+      category TEXT,
       amount NUMERIC DEFAULT 0,
-      date TEXT,
-      description TEXT,
+      note TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS budget_lines (
@@ -515,6 +524,58 @@ async function initDB() {
       last_pulled_at TIMESTAMPTZ
     );
   `)
+
+  // ─── Idempotent migrations for existing installs ──────────────────────────
+  // These ALTER statements upgrade pre-existing databases that were created
+  // with older schemas. All wrapped in try/catch since IF NOT EXISTS works in PG 9.6+.
+  const migrations = [
+    // users: payroll fields
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS advance NUMERIC DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS deductions NUMERIC DEFAULT 0`,
+
+    // assets: align with cloud schema
+    `ALTER TABLE assets ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`,
+    `ALTER TABLE assets ADD COLUMN IF NOT EXISTS useful_life_months INTEGER`,
+    `ALTER TABLE assets ADD COLUMN IF NOT EXISTS note TEXT`,
+    `ALTER TABLE assets ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    // backfill amount from old "value" column if it exists
+    `UPDATE assets SET amount = value WHERE amount IS NULL AND value IS NOT NULL`,
+
+    // liabilities: align with cloud schema
+    `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS category TEXT`,
+    `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS paid_amount NUMERIC DEFAULT 0`,
+    `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS creditor TEXT`,
+    `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS interest_rate NUMERIC`,
+    `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS note TEXT`,
+    `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
+    // equity_entries: create if old "equity" table existed
+    `CREATE TABLE IF NOT EXISTS equity_entries (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT,
+      category TEXT,
+      amount NUMERIC DEFAULT 0,
+      note TEXT,
+      restaurant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )`,
+    // copy data from old "equity" table if it exists and has rows
+    `INSERT INTO equity_entries (id, name, amount, restaurant_id, created_at)
+       SELECT id, name, amount, restaurant_id, created_at FROM equity
+       WHERE NOT EXISTS (SELECT 1 FROM equity_entries WHERE equity_entries.id = equity.id)`,
+  ]
+
+  for (const sql of migrations) {
+    try {
+      await db.exec(sql)
+    } catch (e) {
+      // Ignore "table doesn't exist" errors for the equity backfill
+      if (!/relation .* does not exist|column .* does not exist/i.test(e.message)) {
+        console.warn('[DB] migration warn:', e.message)
+      }
+    }
+  }
 
   console.log('  [DB] PostgreSQL (PGlite) initialized')
   return db

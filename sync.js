@@ -11,7 +11,7 @@ const PULL_TABLES = [
   'ingredients', 'financial_accounts', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
   'suppliers', 'customers',
-  'assets', 'liabilities', 'equity', 'budget_lines',
+  'assets', 'liabilities', 'equity_entries', 'budget_lines',
   // Operational data (multi-device sync)
   'tables', 'orders', 'order_items', 'order_item_modifiers',
   'cash_shifts', 'cash_shift_operations', 'reservations',
