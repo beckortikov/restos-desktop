@@ -1,6 +1,27 @@
 const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain } = require('electron')
 const path = require('path')
+const fs = require('fs')
 const { startAPIServer, setDesktopHandlers, setUpdateState } = require('./api-server')
+
+// File logger — writes both API and renderer logs to ~/Library/Logs/RestOS/main.log
+function setupFileLogger() {
+  try {
+    const logsDir = path.join(app.getPath('userData'), 'logs')
+    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true })
+    const logFile = path.join(logsDir, 'main.log')
+    // Rotate if > 5 MB
+    try { if (fs.statSync(logFile).size > 5 * 1024 * 1024) fs.renameSync(logFile, logFile + '.old') } catch {}
+    const stream = fs.createWriteStream(logFile, { flags: 'a' })
+    stream.write(`\n=== ${new Date().toISOString()} app start v${require('./package.json').version} ===\n`)
+    const origLog = console.log.bind(console)
+    const origErr = console.error.bind(console)
+    console.log = (...a) => { try { stream.write(a.map(String).join(' ') + '\n') } catch {} ; origLog(...a) }
+    console.error = (...a) => { try { stream.write('[ERR] ' + a.map(String).join(' ') + '\n') } catch {} ; origErr(...a) }
+    console.log('[logger] writing to', logFile)
+  } catch (e) {
+    console.error('[logger] init failed:', e.message)
+  }
+}
 
 let mainWindow = null
 let tray = null
@@ -29,6 +50,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: false,
       webSecurity: false,
     },
     autoHideMenuBar: true,
@@ -41,6 +63,19 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     mainWindow.show()
     mainWindow.maximize()
+  })
+
+  // Debug: capture renderer console errors and warnings
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.log(`[renderer ${level >= 3 ? 'ERR' : 'WARN'}] ${message} (${sourceId}:${line})`)
+    }
+  })
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.log(`[renderer] did-fail-load: ${code} ${desc} ${url}`)
+  })
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.log(`[renderer] crashed:`, details)
   })
 
   mainWindow.on('close', (e) => {
@@ -144,6 +179,7 @@ function setupAutoUpdater() {
 
 // App lifecycle
 app.whenReady().then(async () => {
+  setupFileLogger()
   // Start API server (PGlite + Express)
   const server = await startAPIServer(API_PORT)
   console.log(`[RestOS] API server running on port ${API_PORT}`)
