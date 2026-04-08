@@ -52,6 +52,8 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false,
       webSecurity: false,
+      // Don't throttle background tabs — POS app must keep running when minimized/idle
+      backgroundThrottling: false,
     },
     autoHideMenuBar: true,
     show: false,
@@ -73,9 +75,35 @@ function createWindow() {
   })
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.log(`[renderer] did-fail-load: ${code} ${desc} ${url}`)
+    // Auto-recover after a brief delay
+    setTimeout(() => {
+      try { mainWindow?.loadURL(`http://localhost:${API_PORT}`) } catch {}
+    }, 1500)
   })
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     console.log(`[renderer] crashed:`, details)
+    // Auto-recover from a renderer crash so the cashier doesn't see a white screen
+    setTimeout(() => {
+      try { mainWindow?.reload() } catch {}
+    }, 500)
+  })
+  mainWindow.webContents.on('unresponsive', () => {
+    console.log('[renderer] unresponsive — reloading')
+    try { mainWindow?.reload() } catch {}
+  })
+
+  // When window comes back from being hidden/minimized, force a refresh of the
+  // current page so any stalled timers/SSE reconnect cleanly.
+  let lastShownAt = Date.now()
+  mainWindow.on('hide', () => { lastShownAt = Date.now() })
+  mainWindow.on('show', () => {
+    const idleMs = Date.now() - lastShownAt
+    // Only reload if it was hidden for more than 5 minutes — short hides don't need it
+    if (idleMs > 5 * 60 * 1000) {
+      console.log(`[window] shown after ${Math.round(idleMs / 1000)}s — reloading`)
+      try { mainWindow?.webContents.reload() } catch {}
+    }
+    lastShownAt = Date.now()
   })
 
   mainWindow.on('close', (e) => {
