@@ -43,6 +43,7 @@ async function initDB() {
 
     CREATE TABLE IF NOT EXISTS users (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      auth_id UUID,
       username TEXT,
       password TEXT DEFAULT '1234',
       name TEXT,
@@ -55,6 +56,7 @@ async function initDB() {
       station TEXT,
       shift_number INTEGER,
       salary NUMERIC DEFAULT 0,
+      hourly_rate NUMERIC DEFAULT 0,
       advance NUMERIC DEFAULT 0,
       deductions NUMERIC DEFAULT 0,
       permissions JSONB,
@@ -65,6 +67,8 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS zones (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
+      description TEXT,
+      sort_order INTEGER DEFAULT 0,
       restaurant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
@@ -113,10 +117,12 @@ async function initDB() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       menu_item_id UUID,
       ingredient_id UUID,
-      semi_fab_type_id UUID,
+      semi_type_id UUID,
       name TEXT,
       qty NUMERIC DEFAULT 0,
-      unit TEXT
+      unit TEXT,
+      restaurant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS ingredients (
@@ -142,6 +148,7 @@ async function initDB() {
       table_id TEXT,
       waiter_id TEXT,
       cashier_id TEXT,
+      customer_id TEXT,
       payment_method TEXT,
       comment TEXT,
       total NUMERIC DEFAULT 0,
@@ -155,6 +162,7 @@ async function initDB() {
       discount_value NUMERIC DEFAULT 0,
       discount_amount NUMERIC DEFAULT 0,
       discount_reason TEXT,
+      discount_approved_by TEXT,
       is_split BOOLEAN DEFAULT false,
       split_count INTEGER DEFAULT 0,
       shift_id TEXT,
@@ -212,7 +220,8 @@ async function initDB() {
       is_auto BOOLEAN DEFAULT false,
       source_ref TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS stock_movements (
@@ -239,7 +248,8 @@ async function initDB() {
       credit_limit NUMERIC DEFAULT 0,
       current_debt NUMERIC DEFAULT 0,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS stock_receipts (
@@ -256,7 +266,8 @@ async function initDB() {
       confirmed_at TIMESTAMPTZ,
       confirmed_by TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS stock_receipt_lines (
@@ -266,7 +277,8 @@ async function initDB() {
       name TEXT,
       qty NUMERIC DEFAULT 0,
       unit TEXT,
-      price_per_unit NUMERIC DEFAULT 0
+      price_per_unit NUMERIC DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS cash_shifts (
@@ -275,6 +287,11 @@ async function initDB() {
       closed_by TEXT,
       opening_balance NUMERIC DEFAULT 0,
       closing_balance NUMERIC DEFAULT 0,
+      expected_cash NUMERIC,
+      cash_revenue NUMERIC DEFAULT 0,
+      card_revenue NUMERIC DEFAULT 0,
+      orders_count INTEGER DEFAULT 0,
+      avg_check NUMERIC DEFAULT 0,
       status TEXT DEFAULT 'open',
       opened_at TIMESTAMPTZ DEFAULT now(),
       closed_at TIMESTAMPTZ,
@@ -329,7 +346,9 @@ async function initDB() {
       item_qty INTEGER DEFAULT 1,
       item_price NUMERIC DEFAULT 0,
       reason TEXT,
+      approved_by TEXT,
       approved_by_name TEXT,
+      created_by TEXT,
       created_by_name TEXT,
       restaurant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
@@ -339,11 +358,18 @@ async function initDB() {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       order_id UUID,
       split_number INTEGER,
+      split_type TEXT DEFAULT 'equal',
       items JSONB,
+      subtotal NUMERIC DEFAULT 0,
+      service_percent NUMERIC DEFAULT 0,
+      service_amount NUMERIC DEFAULT 0,
       total NUMERIC DEFAULT 0,
       status TEXT DEFAULT 'pending',
       payment_method TEXT,
+      account_id TEXT,
+      account_name TEXT,
       paid_at TIMESTAMPTZ,
+      paid_by TEXT,
       restaurant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     );
@@ -354,7 +380,9 @@ async function initDB() {
       menu_item_id UUID,
       is_required BOOLEAN DEFAULT false,
       max_select INTEGER DEFAULT 1,
-      restaurant_id TEXT
+      sort_order INTEGER DEFAULT 0,
+      restaurant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS modifiers (
@@ -362,7 +390,9 @@ async function initDB() {
       group_id UUID,
       name TEXT,
       price NUMERIC DEFAULT 0,
-      is_default BOOLEAN DEFAULT false
+      is_default BOOLEAN DEFAULT false,
+      sort_order INTEGER DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS semi_finished_types (
@@ -371,7 +401,8 @@ async function initDB() {
       output_unit TEXT DEFAULT 'кг',
       yield_percent NUMERIC DEFAULT 100,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS semi_recipe_lines (
@@ -380,7 +411,8 @@ async function initDB() {
       ingredient_id UUID,
       name TEXT,
       qty_per_unit NUMERIC DEFAULT 0,
-      unit TEXT
+      unit TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS semi_finished_stock (
@@ -391,7 +423,9 @@ async function initDB() {
       unit TEXT,
       price_per_unit NUMERIC DEFAULT 0,
       last_produced_at TIMESTAMPTZ,
-      restaurant_id TEXT
+      restaurant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS stock_writeoffs (
@@ -503,7 +537,8 @@ async function initDB() {
       fact_amount NUMERIC DEFAULT 0,
       period TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
     CREATE TABLE IF NOT EXISTS audit_log (
@@ -530,9 +565,72 @@ async function initDB() {
   // These ALTER statements upgrade pre-existing databases that were created
   // with older schemas. All wrapped in try/catch since IF NOT EXISTS works in PG 9.6+.
   const migrations = [
-    // users: payroll fields
+    // users: payroll fields + cloud parity
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS advance NUMERIC DEFAULT 0`,
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS deductions NUMERIC DEFAULT 0`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_id UUID`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC DEFAULT 0`,
+
+    // zones: cloud parity
+    `ALTER TABLE zones ADD COLUMN IF NOT EXISTS description TEXT`,
+    `ALTER TABLE zones ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`,
+
+    // orders: cloud parity
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS customer_id TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_approved_by TEXT`,
+
+    // tech_card_lines: align with cloud (semi_type_id, restaurant_id, created_at)
+    `ALTER TABLE tech_card_lines ADD COLUMN IF NOT EXISTS semi_type_id UUID`,
+    `ALTER TABLE tech_card_lines ADD COLUMN IF NOT EXISTS restaurant_id TEXT`,
+    `ALTER TABLE tech_card_lines ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`,
+    // copy old semi_fab_type_id to new semi_type_id
+    `UPDATE tech_card_lines SET semi_type_id = semi_fab_type_id WHERE semi_type_id IS NULL AND semi_fab_type_id IS NOT NULL`,
+
+    // financial_operations: cloud has updated_at
+    `ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
+    // suppliers: cloud has updated_at
+    `ALTER TABLE suppliers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
+    // stock_receipts: cloud has updated_at
+    `ALTER TABLE stock_receipts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    // stock_receipt_lines: cloud has created_at
+    `ALTER TABLE stock_receipt_lines ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`,
+
+    // cash_shifts: cloud aggregate columns
+    `ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS expected_cash NUMERIC`,
+    `ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS cash_revenue NUMERIC DEFAULT 0`,
+    `ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS card_revenue NUMERIC DEFAULT 0`,
+    `ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS orders_count INTEGER DEFAULT 0`,
+    `ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS avg_check NUMERIC DEFAULT 0`,
+
+    // order_voids: cloud has approved_by + created_by (UUIDs alongside the *_name fields)
+    `ALTER TABLE order_voids ADD COLUMN IF NOT EXISTS approved_by TEXT`,
+    `ALTER TABLE order_voids ADD COLUMN IF NOT EXISTS created_by TEXT`,
+
+    // order_splits: full cloud schema
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS split_type TEXT DEFAULT 'equal'`,
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS subtotal NUMERIC DEFAULT 0`,
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS service_percent NUMERIC DEFAULT 0`,
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS service_amount NUMERIC DEFAULT 0`,
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS account_id TEXT`,
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS account_name TEXT`,
+    `ALTER TABLE order_splits ADD COLUMN IF NOT EXISTS paid_by TEXT`,
+
+    // modifier_groups + modifiers: cloud has sort_order + created_at
+    `ALTER TABLE modifier_groups ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`,
+    `ALTER TABLE modifier_groups ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE modifiers ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`,
+    `ALTER TABLE modifiers ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`,
+
+    // semi_finished_*: cloud has created_at + updated_at
+    `ALTER TABLE semi_finished_types ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE semi_recipe_lines  ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE semi_finished_stock ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE semi_finished_stock ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
+    // budget_lines: cloud has updated_at
+    `ALTER TABLE budget_lines ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
 
     // assets: align with cloud schema
     `ALTER TABLE assets ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`,
