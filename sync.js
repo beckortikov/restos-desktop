@@ -17,14 +17,14 @@ const PULL_TABLES = [
   'cash_shifts', 'cash_shift_operations', 'reservations',
   'financial_operations', 'stock_movements',
   'order_voids', 'order_splits',
+  'stock_writeoffs', 'stock_writeoff_lines',
+  'stock_receipts', 'stock_receipt_lines',
   'batch_cooking_logs', 'supply_expenses', 'time_entries',
 ]
 
 // On first activation we also pull historical/append-only tables
 const INITIAL_PULL_TABLES = [
   ...PULL_TABLES,
-  'stock_receipts', 'stock_receipt_lines',
-  'stock_writeoffs', 'writeoff_lines',
   'audit_log',
 ]
 
@@ -38,7 +38,7 @@ const PUSH_TABLES = [
   'tables', 'ingredients', 'menu_items', 'tech_card_lines',
   'zones', 'modifier_groups', 'modifiers',
   'stock_receipts', 'stock_receipt_lines',
-  'stock_writeoffs', 'writeoff_lines',
+  'stock_writeoffs', 'stock_writeoff_lines',
   'batch_cooking_logs', 'supply_expenses', 'time_entries',
   'audit_log',
 ]
@@ -134,7 +134,7 @@ class SyncEngine {
         try {
           const filterCol = table === 'restaurants' ? 'id' : 'restaurant_id'
           // For tables without restaurant_id (tech_card_lines, etc), skip filter
-          const noRestFilter = ['tech_card_lines', 'semi_recipe_lines', 'order_items', 'order_item_modifiers', 'stock_receipt_lines', 'writeoff_lines', 'modifiers', 'cash_shift_operations']
+          const noRestFilter = ['tech_card_lines', 'semi_recipe_lines', 'order_items', 'order_item_modifiers', 'stock_receipt_lines', 'stock_writeoff_lines', 'modifiers', 'cash_shift_operations']
           let url
           if (noRestFilter.includes(table)) {
             // These are child tables — pull all (they link via parent FK)

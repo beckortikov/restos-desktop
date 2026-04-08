@@ -62,7 +62,7 @@ const TABLES = [
   'cash_shifts', 'cash_shift_operations', 'reservations', 'customers',
   'order_voids', 'order_splits', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
-  'stock_writeoffs', 'writeoff_lines', 'batch_cooking_logs',
+  'stock_writeoffs', 'stock_writeoff_lines', 'batch_cooking_logs',
   'supply_expenses', 'time_entries', 'assets', 'liabilities', 'equity_entries',
   'budget_lines', 'audit_log',
 ]

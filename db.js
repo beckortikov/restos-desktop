@@ -397,14 +397,15 @@ async function initDB() {
     CREATE TABLE IF NOT EXISTS stock_writeoffs (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       reason TEXT,
+      description TEXT,
       total_cost NUMERIC DEFAULT 0,
-      note TEXT,
       created_by TEXT,
       restaurant_id TEXT,
-      created_at TIMESTAMPTZ DEFAULT now()
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
     );
 
-    CREATE TABLE IF NOT EXISTS writeoff_lines (
+    CREATE TABLE IF NOT EXISTS stock_writeoff_lines (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       writeoff_id UUID,
       ingredient_id TEXT,
@@ -548,6 +549,27 @@ async function initDB() {
     `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS interest_rate NUMERIC`,
     `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS note TEXT`,
     `ALTER TABLE liabilities ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
+    // stock_writeoffs: align with cloud (description column, updated_at)
+    `ALTER TABLE stock_writeoffs ADD COLUMN IF NOT EXISTS description TEXT`,
+    `ALTER TABLE stock_writeoffs ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    // backfill description from old "note" column if it exists
+    `UPDATE stock_writeoffs SET description = note WHERE description IS NULL AND note IS NOT NULL`,
+
+    // stock_writeoff_lines: rename from old writeoff_lines (cloud uses stock_writeoff_lines)
+    `CREATE TABLE IF NOT EXISTS stock_writeoff_lines (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      writeoff_id UUID,
+      ingredient_id TEXT,
+      name TEXT,
+      qty NUMERIC DEFAULT 0,
+      unit TEXT,
+      cost NUMERIC DEFAULT 0
+    )`,
+    // copy any data from the old writeoff_lines table if it exists
+    `INSERT INTO stock_writeoff_lines (id, writeoff_id, ingredient_id, name, qty, unit, cost)
+       SELECT id, writeoff_id, ingredient_id, name, qty, unit, cost FROM writeoff_lines
+       WHERE NOT EXISTS (SELECT 1 FROM stock_writeoff_lines WHERE stock_writeoff_lines.id = writeoff_lines.id)`,
 
     // equity_entries: create if old "equity" table existed
     `CREATE TABLE IF NOT EXISTS equity_entries (
