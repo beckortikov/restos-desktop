@@ -25,7 +25,16 @@ function setupFileLogger() {
 
 let mainWindow = null
 let tray = null
+let apiServerRef = null
 const API_PORT = 3001
+
+// Force-quit helper used by autoUpdater. Closes the HTTP server (otherwise
+// open sockets keep the Node process alive after app.quit) and the tray icon.
+function performShutdown() {
+  app.isQuitting = true
+  try { tray?.destroy() } catch {}
+  try { apiServerRef?.close() } catch {}
+}
 
 // Single instance lock
 const gotTheLock = app.requestSingleInstanceLock()
@@ -194,9 +203,14 @@ function setupAutoUpdater() {
       setUpdateState({ status: 'error', error: err.message })
     })
 
-    // IPC: install update now
+    // IPC: install update now (called from renderer via window.restosDesktop.installUpdate)
     ipcMain.on('install-update', () => {
-      autoUpdater.quitAndInstall()
+      console.log('[updater] install requested via IPC — shutting down')
+      performShutdown()
+      setTimeout(() => {
+        try { autoUpdater.quitAndInstall(false, true) }
+        catch (e) { console.error('[updater] quitAndInstall failed:', e.message) }
+      }, 250)
     })
 
     autoUpdater.checkForUpdatesAndNotify().catch(() => {})
@@ -210,6 +224,7 @@ app.whenReady().then(async () => {
   setupFileLogger()
   // Start API server (PGlite + Express)
   const server = await startAPIServer(API_PORT)
+  apiServerRef = server.server
   console.log(`[RestOS] API server running on port ${API_PORT}`)
 
   // Handle license blocked/unblocked from sync engine
@@ -237,7 +252,14 @@ app.whenReady().then(async () => {
     },
     installUpdate: () => {
       if (!autoUpdaterRef) throw new Error('Updater unavailable')
-      autoUpdaterRef.quitAndInstall()
+      console.log('[updater] install requested — shutting down')
+      performShutdown()
+      // (isSilent=false → show progress, isForceRunAfter=true → relaunch the new app on macOS)
+      // Defer slightly so the HTTP response can flush before quit.
+      setTimeout(() => {
+        try { autoUpdaterRef.quitAndInstall(false, true) }
+        catch (e) { console.error('[updater] quitAndInstall failed:', e.message) }
+      }, 250)
     },
     openConnect: () => {
       shell.openExternal(`http://localhost:${API_PORT}/connect`)

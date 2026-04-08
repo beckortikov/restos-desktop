@@ -512,11 +512,15 @@ h1{font-size:20px;margin-bottom:8px}p{color:#a1a1aa;font-size:14px;margin-bottom
   // Listen
   return new Promise((resolve) => {
     const ip = getLocalIP()
-    app.listen(port, '0.0.0.0', () => {
+    const server = app.listen(port, '0.0.0.0', () => {
       console.log(`[API] http://localhost:${port}`)
       console.log(`[API] http://${ip}:${port}`)
       console.log(`[API] Waiters connect: http://${ip}:${port}`)
-      resolve({ port, ip, onBlocked: (cb) => { onBlockedCallback = cb }, onUnblocked: (cb) => { onUnblockedCallback = cb } })
+      resolve({
+        port, ip, server,
+        onBlocked: (cb) => { onBlockedCallback = cb },
+        onUnblocked: (cb) => { onUnblockedCallback = cb },
+      })
     })
   })
 }
