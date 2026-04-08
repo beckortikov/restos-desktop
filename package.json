@@ -1,6 +1,6 @@
 {
   "name": "restos-desktop",
-  "version": "1.0.50",
+  "version": "1.0.51",
   "description": "RestOS Desktop — POS система для ресторанов",
   "main": "main.js",
   "scripts": {
@@ -30,7 +30,10 @@
       "node_modules/**/*"
     ],
     "mac": {
-      "target": "dmg",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
       "icon": "assets/icon.png",
       "category": "public.app-category.business"
     },
