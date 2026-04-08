@@ -134,14 +134,35 @@ async function startAPIServer(port = 3001) {
         return r
       })
 
-      // Nested selects
+      // Nested selects (PostgREST embedded resources: select=*,child_table(*))
       const selectParam = req.query.select || '*'
       const nestedMatch = selectParam.match(/(\w+)\(\*\)/g)
       if (nestedMatch) {
+        // Map: parent table → FK column name in child table
+        // Default rule (table - trailing 's' + '_id') doesn't work for prefixed names
+        // like stock_writeoffs → writeoff_id, stock_receipts → receipt_id, semi_finished_types → semi_type_id, etc.
+        const fkMap = {
+          stock_writeoffs: 'writeoff_id',
+          stock_receipts: 'receipt_id',
+          semi_finished_types: 'semi_type_id',
+          cash_shifts: 'shift_id',
+        }
+        // Tables that should be embedded as a SINGLE OBJECT (parent → FK lookup),
+        // not as an array of children
+        const parentEmbeds = {
+          users: { fk: null, lookupBy: 'id' }, // SELECT users(name) means FK from parent.user_id or similar
+        }
+
+        function getChildFk(parent, child) {
+          if (fkMap[parent]) return fkMap[parent]
+          // Default: strip trailing 's', append '_id'
+          return parent.replace(/s$/, '') + '_id'
+        }
+
         for (const match of nestedMatch) {
           const child = match.replace('(*)', '')
-          if (!TABLES.includes(child)) continue
-          const fk = table.replace(/s$/, '') + '_id'
+          if (!TABLES.includes(child) && child !== 'users') continue
+          const fk = getChildFk(table, child)
           for (const row of rows) {
             try {
               const childResult = await db.query(`SELECT * FROM "${child}" WHERE "${fk}" = $1`, [row.id])
@@ -153,6 +174,40 @@ async function startAPIServer(port = 3001) {
                 return c
               })
             } catch { row[child] = [] }
+          }
+        }
+
+        // Handle PostgREST "select=...,parent(col)" syntax for parent lookups
+        // (single object, not array). Example: stock_writeoffs.users(name) where
+        // stock_writeoffs.created_by → users.id
+        const parentMatch = selectParam.match(/(\w+)\(([^)]+)\)/g)
+        if (parentMatch) {
+          for (const match of parentMatch) {
+            const m = match.match(/(\w+)\(([^)]+)\)/)
+            if (!m) continue
+            const parentTable = m[1]
+            const cols = m[2]
+            if (cols === '*') continue // already handled above
+            if (!TABLES.includes(parentTable)) continue
+            // Try common FK column names that point to the parent
+            const candidateFks = [
+              'created_by', 'user_id', `${parentTable.replace(/s$/, '')}_id`,
+              parentTable === 'users' ? 'created_by' : null,
+            ].filter(Boolean)
+            for (const row of rows) {
+              if (row[parentTable] !== undefined) continue // skip if already an array from above
+              for (const fkCol of candidateFks) {
+                if (row[fkCol] === undefined || row[fkCol] === null) continue
+                try {
+                  const r = await db.query(`SELECT ${cols.split(',').map(c => `"${c.trim()}"`).join(',')} FROM "${parentTable}" WHERE id = $1 LIMIT 1`, [row[fkCol]])
+                  if (r.rows.length > 0) {
+                    row[parentTable] = r.rows[0]
+                    break
+                  }
+                } catch {}
+              }
+              if (row[parentTable] === undefined) row[parentTable] = null
+            }
           }
         }
       }
