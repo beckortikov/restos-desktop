@@ -7,40 +7,142 @@ const { initDB, getDB, DB_PATH } = require('./db')
 
 // ─── PostgREST-compatible API ───────────────────────────────────────────────
 
+// Build a single WHERE expression for one (key, val) PostgREST filter pair.
+// Returns { sql, params, nextIdx } where sql may be empty if unsupported.
+function buildFilter(key, val, startIdx) {
+  if (typeof val !== 'string') return { sql: '', params: [], nextIdx: startIdx }
+  // Single-param helpers
+  const param1 = (sql, value) => ({
+    sql: sql.replace('$?', `$${startIdx}`),
+    params: [value],
+    nextIdx: startIdx + 1,
+  })
+  const noParam = (sql) => ({ sql, params: [], nextIdx: startIdx })
+
+  if (val.startsWith('eq.')) {
+    const v = val.slice(3)
+    if (v === 'true')  return noParam(`"${key}" = true`)
+    if (v === 'false') return noParam(`"${key}" = false`)
+    if (v === 'null')  return noParam(`"${key}" IS NULL`)
+    return param1(`"${key}" = $?`, v)
+  }
+  if (val.startsWith('neq.')) return param1(`"${key}" != $?`, val.slice(4))
+  if (val.startsWith('gt.'))  return param1(`"${key}" > $?`,  val.slice(3))
+  if (val.startsWith('gte.')) return param1(`"${key}" >= $?`, val.slice(4))
+  if (val.startsWith('lt.'))  return param1(`"${key}" < $?`,  val.slice(3))
+  if (val.startsWith('lte.')) return param1(`"${key}" <= $?`, val.slice(4))
+  // PostgREST uses `*` as wildcard instead of `%`. Translate.
+  // Explicit ::text cast prevents PG 'could not determine data type of parameter' errors.
+  if (val.startsWith('like.'))  return param1(`"${key}" LIKE $?::text`,  val.slice(5).replace(/\*/g, '%'))
+  // Use LOWER() instead of ILIKE because PGlite's default collation doesn't
+  // fold Unicode (Cyrillic) characters case-insensitively in ILIKE.
+  if (val.startsWith('ilike.')) return param1(`LOWER("${key}"::text) LIKE LOWER($?::text)`, val.slice(6).replace(/\*/g, '%'))
+  if (val.startsWith('in.')) {
+    let raw = val.slice(3)
+    if (raw.startsWith('(') && raw.endsWith(')')) raw = raw.slice(1, -1)
+    const values = raw.split(',').filter(v => v.length > 0)
+    if (values.length === 0) return noParam('FALSE')
+    let idx = startIdx
+    const placeholders = values.map(() => `$${idx++}`).join(',')
+    return { sql: `"${key}" IN (${placeholders})`, params: values, nextIdx: idx }
+  }
+  if (val.startsWith('is.')) {
+    const v = val.slice(3)
+    if (v === 'null')  return noParam(`"${key}" IS NULL`)
+    if (v === 'true')  return noParam(`"${key}" = true`)
+    if (v === 'false') return noParam(`"${key}" = false`)
+    return noParam('')
+  }
+  if (val.startsWith('not.is.')) {
+    const v = val.slice(7)
+    if (v === 'null')  return noParam(`"${key}" IS NOT NULL`)
+    if (v === 'true')  return noParam(`"${key}" != true`)
+    if (v === 'false') return noParam(`"${key}" != false`)
+    return noParam('')
+  }
+  if (val.startsWith('not.eq.'))   return param1(`"${key}" != $?`, val.slice(7))
+  if (val.startsWith('not.like.')) return param1(`"${key}" NOT LIKE $?::text`,  val.slice(9).replace(/\*/g, '%'))
+  if (val.startsWith('not.ilike.'))return param1(`LOWER("${key}"::text) NOT LIKE LOWER($?::text)`, val.slice(10).replace(/\*/g, '%'))
+  return noParam('')
+}
+
+// Parse PostgREST `or=(filter1,filter2,...)` into a single SQL OR expression.
+// filters look like `col.eq.value` or `col.is.null` or `col.ilike.*foo*`.
+function parseOrFilter(orVal, startIdx) {
+  let raw = orVal
+  if (raw.startsWith('(') && raw.endsWith(')')) raw = raw.slice(1, -1)
+  const parts = []
+  // Split on commas that are not inside parentheses (to be safe with in.(a,b))
+  let depth = 0, buf = ''
+  for (const ch of raw) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (ch === ',' && depth === 0) { if (buf) parts.push(buf); buf = ''; continue }
+    buf += ch
+  }
+  if (buf) parts.push(buf)
+
+  const sqls = []
+  const params = []
+  let i = startIdx
+  for (const p of parts) {
+    // Each part is "col.op.value" possibly with 'not.' prefix
+    const dotIdx = p.indexOf('.')
+    if (dotIdx < 0) continue
+    const col = p.slice(0, dotIdx)
+    const opVal = p.slice(dotIdx + 1)
+    const f = buildFilter(col, opVal, i)
+    if (f.sql) {
+      sqls.push(f.sql)
+      params.push(...f.params)
+      i = f.nextIdx
+    }
+  }
+  return {
+    sql: sqls.length > 0 ? '(' + sqls.join(' OR ') + ')' : '',
+    params,
+    nextIdx: i,
+  }
+}
+
 function parseFilters(query) {
   const filters = []
   const params = []
   let paramIdx = 1
   for (const [key, val] of Object.entries(query)) {
-    if (['select', 'order', 'limit', 'offset'].includes(key)) continue
+    if (['select', 'order', 'limit', 'offset', 'on_conflict'].includes(key)) continue
     if (typeof val !== 'string') continue
-    if (val.startsWith('eq.')) {
-      const v = val.slice(3)
-      // Handle booleans: eq.true / eq.false → use SQL boolean, not string
-      if (v === 'true') { filters.push(`"${key}" = true`); }
-      else if (v === 'false') { filters.push(`"${key}" = false`); }
-      else { filters.push(`"${key}" = $${paramIdx++}`); params.push(v) }
+
+    // Handle PostgREST 'or=(...)' compound filter
+    if (key === 'or') {
+      const r = parseOrFilter(val, paramIdx)
+      if (r.sql) { filters.push(r.sql); params.push(...r.params); paramIdx = r.nextIdx }
+      continue
     }
-    else if (val.startsWith('neq.')) { filters.push(`"${key}" != $${paramIdx++}`); params.push(val.slice(4)) }
-    else if (val.startsWith('gt.')) { filters.push(`"${key}" > $${paramIdx++}`); params.push(val.slice(3)) }
-    else if (val.startsWith('gte.')) { filters.push(`"${key}" >= $${paramIdx++}`); params.push(val.slice(4)) }
-    else if (val.startsWith('lt.')) { filters.push(`"${key}" < $${paramIdx++}`); params.push(val.slice(3)) }
-    else if (val.startsWith('lte.')) { filters.push(`"${key}" <= $${paramIdx++}`); params.push(val.slice(4)) }
-    else if (val.startsWith('like.')) { filters.push(`"${key}" LIKE $${paramIdx++}`); params.push(val.slice(5)) }
-    else if (val.startsWith('ilike.')) { filters.push(`"${key}" ILIKE $${paramIdx++}`); params.push(val.slice(6)) }
-    else if (val.startsWith('in.')) {
-      const values = val.slice(4, -1).split(',')
-      filters.push(`"${key}" IN (${values.map(() => `$${paramIdx++}`).join(',')})`)
-      params.push(...values)
+    // Handle PostgREST 'and=(...)' compound filter
+    if (key === 'and') {
+      const r = parseOrFilter(val, paramIdx)
+      // Same parsing, but join with AND. parseOrFilter currently joins with OR;
+      // for AND we replicate the loop:
+      const sqls = []
+      let raw = val
+      if (raw.startsWith('(') && raw.endsWith(')')) raw = raw.slice(1, -1)
+      let i = paramIdx
+      for (const p of raw.split(',')) {
+        const dotIdx = p.indexOf('.')
+        if (dotIdx < 0) continue
+        const f = buildFilter(p.slice(0, dotIdx), p.slice(dotIdx + 1), i)
+        if (f.sql) { sqls.push(f.sql); params.push(...f.params); i = f.nextIdx }
+      }
+      if (sqls.length) { filters.push('(' + sqls.join(' AND ') + ')'); paramIdx = i }
+      continue
     }
-    else if (val.startsWith('is.')) {
-      const v = val.slice(3)
-      if (v === 'null') filters.push(`"${key}" IS NULL`)
-      else if (v === 'true') filters.push(`"${key}" = true`)
-      else if (v === 'false') filters.push(`"${key}" = false`)
-    }
-    else if (val.startsWith('not.is.')) {
-      if (val.slice(7) === 'null') filters.push(`"${key}" IS NOT NULL`)
+
+    const f = buildFilter(key, val, paramIdx)
+    if (f.sql) {
+      filters.push(f.sql)
+      params.push(...f.params)
+      paramIdx = f.nextIdx
     }
   }
   return { where: filters.length > 0 ? ' WHERE ' + filters.join(' AND ') : '', params }
@@ -111,120 +213,219 @@ async function startAPIServer(port = 3001) {
     app.use(express.static(frontendDir, { index: false }))
   }
 
+  // ─── PostgREST embed resolver ─────────────────────────────────────────────
+  // Maps known FK relationships that the default `table.replace(/s$/,'')+'_id'`
+  // rule can't infer (prefixed table names, group_id, etc.).
+  const FK_MAP = {
+    // parent → { child → fk_column_in_child }
+    stock_writeoffs:     { stock_writeoff_lines: 'writeoff_id' },
+    stock_receipts:      { stock_receipt_lines: 'receipt_id' },
+    semi_finished_types: { semi_recipe_lines: 'semi_type_id', semi_finished_stock: 'semi_type_id' },
+    cash_shifts:         { cash_shift_operations: 'shift_id' },
+    modifier_groups:     { modifiers: 'group_id' },
+    order_items:         { order_item_modifiers: 'order_item_id' },
+  }
+
+  function getChildFk(parent, child) {
+    if (FK_MAP[parent]?.[child]) return FK_MAP[parent][child]
+    return parent.replace(/s$/, '') + '_id'
+  }
+
+  // Lift numeric strings to numbers (PGlite returns NUMERIC as string).
+  function liftNumerics(row) {
+    const r = { ...row }
+    for (const [k, v] of Object.entries(r)) {
+      if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v)
+          && !k.endsWith('_id') && k !== 'id' && k !== 'phone' && k !== 'password' && k !== 'restaurant_id') {
+        r[k] = Number(v)
+      }
+    }
+    return r
+  }
+
+  // Parse a PostgREST select string into an array of embed specs.
+  // Examples it handles:
+  //   `*`
+  //   `*, child(*)`
+  //   `*, child(*), parent(name)`
+  //   `*, alias:parent!fk_constraint(name)`
+  //   `id, name, total`     (column list — also returned)
+  function parseSelect(selectStr) {
+    if (!selectStr) selectStr = '*'
+    const embeds = []
+    const cols = []
+    // Split top-level by commas (respecting parentheses)
+    let depth = 0, buf = ''
+    const parts = []
+    for (const ch of selectStr) {
+      if (ch === '(') depth++
+      if (ch === ')') depth--
+      if (ch === ',' && depth === 0) { parts.push(buf.trim()); buf = ''; continue }
+      buf += ch
+    }
+    if (buf.trim()) parts.push(buf.trim())
+
+    for (const p of parts) {
+      // alias:table!fk_constraint(cols)  OR  table!fk_constraint(cols)  OR  table(cols)
+      const m = p.match(/^(?:(\w+):)?(\w+)(?:!(\w+))?\((.*)\)$/)
+      if (m) {
+        embeds.push({ alias: m[1] || m[2], table: m[2], fkConstraint: m[3], cols: m[4].trim() })
+      } else if (p === '*') {
+        cols.push('*')
+      } else {
+        cols.push(p)
+      }
+    }
+    return { cols, embeds }
+  }
+
+  // Try to find the FK column in `parent` table that links to `child` (an aliased embed).
+  // Uses the explicit constraint name when present (e.g., cash_shifts_opened_by_fkey → opened_by).
+  async function findParentFkCol(db, parentTable, childTable, fkConstraint) {
+    if (fkConstraint) {
+      // Constraint name pattern: <parentTable>_<col>_fkey
+      const m = fkConstraint.match(new RegExp(`^${parentTable}_(.+)_fkey$`))
+      if (m) return m[1]
+    }
+    // Common candidates
+    const candidates = [
+      `${childTable.replace(/s$/, '')}_id`,    // user_id
+      'created_by', 'user_id', 'opened_by', 'closed_by', 'cashier_id', 'waiter_id',
+      'approved_by', 'paid_by', 'confirmed_by', 'discount_approved_by',
+    ]
+    try {
+      const cc = await db.query(`SELECT column_name FROM information_schema.columns WHERE table_name = $1`, [parentTable])
+      const existing = new Set(cc.rows.map(r => r.column_name))
+      for (const c of candidates) if (existing.has(c)) return c
+    } catch {}
+    return null
+  }
+
+  async function resolveEmbeds(db, table, rows, embeds) {
+    for (const embed of embeds) {
+      // Determine if this is a child embed (array, FK in child) or parent embed (single, FK in parent)
+      // Heuristic: if the child table has an FK that points to the parent table,
+      // it's a child-of-parent (1:N). Otherwise it's a parent-of-this (N:1) lookup.
+      const childTable = embed.table
+      // Try child-of-parent first
+      const childFk = getChildFk(table, childTable)
+      let isChildEmbed = false
+      try {
+        const cc = await db.query(`SELECT column_name FROM information_schema.columns WHERE table_name = $1 AND column_name = $2`, [childTable, childFk])
+        if (cc.rows.length > 0) isChildEmbed = true
+      } catch {}
+
+      // Pick which columns to select (PostgREST cols are within the parens)
+      const colList = (embed.cols && embed.cols !== '*')
+        ? embed.cols.split(',').map(c => `"${c.trim()}"`).join(',')
+        : '*'
+
+      if (isChildEmbed) {
+        // 1:N — array of children
+        for (const row of rows) {
+          try {
+            const r = await db.query(`SELECT ${colList} FROM "${childTable}" WHERE "${childFk}" = $1`, [row.id])
+            row[embed.alias] = r.rows.map(liftNumerics)
+          } catch { row[embed.alias] = [] }
+        }
+      } else {
+        // N:1 — find FK in parent table
+        const parentFkCol = await findParentFkCol(db, table, childTable, embed.fkConstraint)
+        for (const row of rows) {
+          if (!parentFkCol || row[parentFkCol] == null) { row[embed.alias] = null; continue }
+          try {
+            const r = await db.query(`SELECT ${colList} FROM "${childTable}" WHERE id = $1 LIMIT 1`, [row[parentFkCol]])
+            row[embed.alias] = r.rows.length > 0 ? liftNumerics(r.rows[0]) : null
+          } catch { row[embed.alias] = null }
+        }
+      }
+    }
+    return rows
+  }
+
   // GET
-  app.get('/rest/v1/:table', async (req, res) => {
+  async function handleGet(req, res, headOnly = false) {
     const table = req.params.table
     if (!TABLES.includes(table)) return res.status(404).json({ error: 'Not found' })
     try {
       const db = getDB()
       const { where, params } = parseFilters(req.query)
       const order = parseOrder(req.query)
-      const limit = req.query.limit ? ` LIMIT ${parseInt(req.query.limit)}` : ''
-      const offset = req.query.offset ? ` OFFSET ${parseInt(req.query.offset)}` : ''
 
-      const sql = `SELECT * FROM "${table}"${where}${order}${limit}${offset}`
-      const result = await db.query(sql, params)
-      let rows = result.rows.map(row => {
-        const r = { ...row }
-        for (const [key, val] of Object.entries(r)) {
-          if (typeof val === 'string' && /^-?\d+(\.\d+)?$/.test(val) && !key.endsWith('_id') && key !== 'id' && key !== 'phone' && key !== 'password' && key !== 'restaurant_id') {
-            r[key] = Number(val)
-          }
-        }
-        return r
-      })
+      // Range header support: "Range: 0-49" + "Range-Unit: items"
+      let rangeFrom = null, rangeTo = null
+      if (req.headers.range) {
+        const m = req.headers.range.match(/^(\d+)-(\d+)$/)
+        if (m) { rangeFrom = parseInt(m[1]); rangeTo = parseInt(m[2]) }
+      }
 
-      // Nested selects (PostgREST embedded resources: select=*,child_table(*))
-      const selectParam = req.query.select || '*'
-      const nestedMatch = selectParam.match(/(\w+)\(\*\)/g)
-      if (nestedMatch) {
-        // Map: parent table → FK column name in child table
-        // Default rule (table - trailing 's' + '_id') doesn't work for prefixed names
-        // like stock_writeoffs → writeoff_id, stock_receipts → receipt_id, semi_finished_types → semi_type_id, etc.
-        const fkMap = {
-          stock_writeoffs: 'writeoff_id',
-          stock_receipts: 'receipt_id',
-          semi_finished_types: 'semi_type_id',
-          cash_shifts: 'shift_id',
-        }
-        // Tables that should be embedded as a SINGLE OBJECT (parent → FK lookup),
-        // not as an array of children
-        const parentEmbeds = {
-          users: { fk: null, lookupBy: 'id' }, // SELECT users(name) means FK from parent.user_id or similar
-        }
+      let limit = ''
+      let offset = ''
+      if (rangeFrom !== null && rangeTo !== null) {
+        limit = ` LIMIT ${rangeTo - rangeFrom + 1}`
+        offset = ` OFFSET ${rangeFrom}`
+      } else {
+        if (req.query.limit) limit = ` LIMIT ${parseInt(req.query.limit)}`
+        if (req.query.offset) offset = ` OFFSET ${parseInt(req.query.offset)}`
+      }
 
-        function getChildFk(parent, child) {
-          if (fkMap[parent]) return fkMap[parent]
-          // Default: strip trailing 's', append '_id'
-          return parent.replace(/s$/, '') + '_id'
-        }
+      // Parse select for partial columns + embeds
+      const { cols: selectCols, embeds } = parseSelect(req.query.select)
+      const wantCount = (req.headers.prefer || '').includes('count=exact')
 
-        for (const match of nestedMatch) {
-          const child = match.replace('(*)', '')
-          if (!TABLES.includes(child) && child !== 'users') continue
-          const fk = getChildFk(table, child)
-          for (const row of rows) {
-            try {
-              const childResult = await db.query(`SELECT * FROM "${child}" WHERE "${fk}" = $1`, [row.id])
-              row[child] = childResult.rows.map(cr => {
-                const c = { ...cr }
-                for (const [k, v] of Object.entries(c)) {
-                  if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v) && !k.endsWith('_id') && k !== 'id' && k !== 'phone' && k !== 'password' && k !== 'restaurant_id') c[k] = Number(v)
-                }
-                return c
-              })
-            } catch { row[child] = [] }
-          }
-        }
+      // Build the SELECT clause: include any non-embed columns + always the FK columns
+      // we need for embeds (created_by, user_id, etc). Simplest: select * if there are
+      // embeds, otherwise honor the column list.
+      let selectClause = '*'
+      if (embeds.length === 0 && selectCols.length > 0 && !selectCols.includes('*')) {
+        selectClause = selectCols.map(c => `"${c.trim()}"`).join(',')
+      }
 
-        // Handle PostgREST "select=...,parent(col)" syntax for parent lookups
-        // (single object, not array). Example: stock_writeoffs.users(name) where
-        // stock_writeoffs.created_by → users.id
-        const parentMatch = selectParam.match(/(\w+)\(([^)]+)\)/g)
-        if (parentMatch) {
-          for (const match of parentMatch) {
-            const m = match.match(/(\w+)\(([^)]+)\)/)
-            if (!m) continue
-            const parentTable = m[1]
-            const cols = m[2]
-            if (cols === '*') continue // already handled above
-            if (!TABLES.includes(parentTable)) continue
-            // Try common FK column names that point to the parent
-            const candidateFks = [
-              'created_by', 'user_id', `${parentTable.replace(/s$/, '')}_id`,
-              parentTable === 'users' ? 'created_by' : null,
-            ].filter(Boolean)
-            for (const row of rows) {
-              if (row[parentTable] !== undefined) continue // skip if already an array from above
-              for (const fkCol of candidateFks) {
-                if (row[fkCol] === undefined || row[fkCol] === null) continue
-                try {
-                  const r = await db.query(`SELECT ${cols.split(',').map(c => `"${c.trim()}"`).join(',')} FROM "${parentTable}" WHERE id = $1 LIMIT 1`, [row[fkCol]])
-                  if (r.rows.length > 0) {
-                    row[parentTable] = r.rows[0]
-                    break
-                  }
-                } catch {}
-              }
-              if (row[parentTable] === undefined) row[parentTable] = null
-            }
-          }
+      // For HEAD requests with count=exact, we only need the count.
+      let totalCount = null
+      if (wantCount || headOnly) {
+        try {
+          const cr = await db.query(`SELECT COUNT(*) AS c FROM "${table}"${where}`, params)
+          totalCount = Number(cr.rows[0]?.c || 0)
+        } catch {}
+      }
+
+      let rows = []
+      if (!headOnly) {
+        const sql = `SELECT ${selectClause} FROM "${table}"${where}${order}${limit}${offset}`
+        const result = await db.query(sql, params)
+        rows = result.rows.map(liftNumerics)
+        if (embeds.length > 0) {
+          await resolveEmbeds(db, table, rows, embeds)
         }
       }
 
-      // .single()
+      if (totalCount !== null) {
+        const from = rangeFrom ?? 0
+        const to = rows.length > 0 ? from + rows.length - 1 : 0
+        res.setHeader('Content-Range', `${from}-${to}/${totalCount}`)
+      }
+
+      // .single() — Accept: application/vnd.pgrst.object+json
       if ((req.headers.accept || '').includes('vnd.pgrst.object')) {
         res.setHeader('Content-Type', 'application/vnd.pgrst.object+json; charset=utf-8')
         if (rows.length === 0) return res.status(406).json({ message: 'Not found' })
         return res.send(JSON.stringify(rows[0]))
       }
 
-      res.json(rows)
+      if (headOnly) {
+        return res.status(rangeFrom !== null ? 206 : 200).end()
+      }
+      res.status(rangeFrom !== null ? 206 : 200).json(rows)
     } catch (err) {
       console.error(`[GET] ${table} error:`, err.message)
       res.status(500).json({ error: err.message })
     }
-  })
+  }
+
+  // Express routes HEAD requests through the GET handler automatically.
+  // We detect the method inside the handler instead of registering a separate route.
+  app.get('/rest/v1/:table', (req, res) => handleGet(req, res, req.method === 'HEAD'))
 
   // Helper: ensure all columns from `row` exist on `table`. Auto-creates missing columns as TEXT.
   async function ensureColumns(db, table, row) {

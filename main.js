@@ -184,7 +184,13 @@ function setupAutoUpdater() {
           document.body.innerHTML = '<div style="position:fixed;inset:0;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;font-family:system-ui;z-index:999999"><div style="text-align:center"><h1 style="font-size:24px;margin-bottom:12px">Критическое обновление v${info.version}</h1><p style="color:#a1a1aa;margin-bottom:24px">Требуется перезагрузка для продолжения работы</p><button onclick="window.restosDesktop.installUpdate()" style="background:#3b82f6;color:#fff;border:none;padding:12px 32px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer">Перезагрузить сейчас</button></div></div>';
         `).catch(() => {})
         // Auto-restart after 30 seconds if user doesn't click
-        setTimeout(() => autoUpdater.quitAndInstall(), 30000)
+        setTimeout(() => {
+          performShutdown()
+          setTimeout(() => {
+            try { autoUpdater.quitAndInstall(false, true) }
+            catch (e) { console.error('[updater] quitAndInstall failed:', e.message) }
+          }, 250)
+        }, 30000)
       } else {
         // Normal update — show banner
         mainWindow?.webContents.executeJavaScript(`
@@ -273,6 +279,9 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   app.isQuitting = true
+  // Close HTTP server gracefully so the Node process can exit cleanly
+  try { apiServerRef?.close() } catch {}
+  try { tray?.destroy() } catch {}
 })
 
 app.on('activate', () => {

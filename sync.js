@@ -29,17 +29,35 @@ const INITIAL_PULL_TABLES = [
 ]
 
 // Tables to PUSH to cloud (data created/modified locally)
+// ORDER IS CRITICAL — parents must come before children to satisfy FK constraints
+// when pushing brand-new rows to cloud.
 const PUSH_TABLES = [
-  'orders', 'order_items', 'order_item_modifiers',
+  // Reference / config (no FK dependencies on other writable tables)
+  'zones', 'customers', 'suppliers', 'ingredients',
+  'financial_accounts', 'modifier_groups', 'modifiers',
+  'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
+  'assets', 'liabilities', 'equity_entries', 'budget_lines',
+  // Menu (depends on ingredients via tech_card_lines)
+  'menu_items', 'tech_card_lines',
+  // Tables (depends on zones)
+  'tables',
+  // Cash shifts (depends on users which are pulled-only)
   'cash_shifts', 'cash_shift_operations',
-  'financial_operations', 'stock_movements',
+  // Orders + dependencies (depends on tables, menu_items, modifiers, users)
+  'orders', 'order_items', 'order_item_modifiers',
   'order_voids', 'order_splits',
-  'reservations', 'customers',
-  'tables', 'ingredients', 'menu_items', 'tech_card_lines',
-  'zones', 'modifier_groups', 'modifiers',
+  'reservations',
+  // Stock movements
   'stock_receipts', 'stock_receipt_lines',
   'stock_writeoffs', 'stock_writeoff_lines',
-  'batch_cooking_logs', 'supply_expenses', 'time_entries',
+  'stock_movements',
+  // Finance (depends on financial_accounts)
+  'financial_operations',
+  // Batch cooking + supply (depends on menu_items / ingredients)
+  'batch_cooking_logs', 'supply_expenses',
+  // Time tracking (depends on users)
+  'time_entries',
+  // Audit log
   'audit_log',
 ]
 
@@ -248,6 +266,18 @@ class SyncEngine {
 
         if (!rows || rows.length === 0) continue
 
+        // Columns that should ALWAYS be stripped before pushing — either generated
+        // columns in cloud (Postgres rejects writes), or legacy local columns that
+        // never existed in cloud schema.
+        const STRIP_COLS = {
+          liabilities: ['remaining_amount'],   // GENERATED ALWAYS AS (total - paid)
+          assets: ['depreciation_rate', 'value'],  // legacy local-only columns
+          stock_writeoffs: ['note'],           // legacy; cloud has 'description'
+          stock_movements: ['ingredient_name'], // local denorm
+          stock_receipts: ['supplier_name'],    // local denorm
+          users: ['email', 'phone'],            // local-only extra fields
+        }
+
         // Upsert to Supabase (POST with on_conflict)
         // Supabase PostgREST supports upsert via Prefer: resolution=merge-duplicates
         let allBatchesOk = true
@@ -255,6 +285,9 @@ class SyncEngine {
         for (let i = 0; i < rows.length; i += batchSize) {
           const batch = rows.slice(i, i + batchSize).map(row => {
             const clean = { ...row }
+            // Strip known-bad columns
+            const stripList = STRIP_COLS[table] || []
+            for (const c of stripList) delete clean[c]
             // Ensure restaurant_id is set
             if (!clean.restaurant_id && table !== 'restaurants') {
               clean.restaurant_id = this.restaurantId
@@ -341,7 +374,8 @@ class SyncEngine {
       } catch {}
     }, 3000)
 
-    // Slower pull loop (every 60 sec) — pulls reference data updates from cloud
+    // Pull loop (every 30 sec) — pulls cloud changes for multi-device sync.
+    // Faster than the previous 60s so updates from web/other desktops propagate quickly.
     setInterval(async () => {
       try {
         const res = await fetch(`${this.supabaseUrl}/rest/v1/restaurants?limit=1`, {
@@ -357,9 +391,9 @@ class SyncEngine {
       } catch {
         console.log('[sync] Offline — skipping pull')
       }
-    }, 60000)
+    }, 30000)
 
-    console.log('[sync] Started (push: 3s, pull: 60s)')
+    console.log('[sync] Started (push: 3s, pull: 30s)')
   }
 }
 
