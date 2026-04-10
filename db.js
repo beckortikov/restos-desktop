@@ -636,6 +636,11 @@ async function initDB() {
     // batch_cooking_logs: reason for writeoffs
     `ALTER TABLE batch_cooking_logs ADD COLUMN IF NOT EXISTS reason TEXT`,
 
+    // PIN lock for POS
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS pin TEXT`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS pin_lock_enabled BOOLEAN DEFAULT false`,
+    `ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS pin_lock_timeout_min INTEGER DEFAULT 5`,
+
     // assets: align with cloud schema
     `ALTER TABLE assets ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`,
     `ALTER TABLE assets ADD COLUMN IF NOT EXISTS useful_life_months INTEGER`,
