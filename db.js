@@ -457,6 +457,7 @@ async function initDB() {
       produced_by TEXT,
       produced_by_id UUID,
       cost_total NUMERIC DEFAULT 0,
+      reason TEXT,
       restaurant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT now()
     );
@@ -631,6 +632,9 @@ async function initDB() {
 
     // budget_lines: cloud has updated_at
     `ALTER TABLE budget_lines ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
+    // batch_cooking_logs: reason for writeoffs
+    `ALTER TABLE batch_cooking_logs ADD COLUMN IF NOT EXISTS reason TEXT`,
 
     // assets: align with cloud schema
     `ALTER TABLE assets ADD COLUMN IF NOT EXISTS amount NUMERIC DEFAULT 0`,
