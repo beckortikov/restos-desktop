@@ -580,19 +580,63 @@ h1{font-size:20px;margin-bottom:8px}p{color:#a1a1aa;font-size:14px;margin-bottom
   let blockReason = ''
 
   // License check endpoint (used by blocked.html retry button)
+  // Checks CLOUD first (real-time), falls back to local DB if offline.
   app.get('/license-check', async (req, res) => {
     try {
-      const db = getDB()
       const cfg = loadConfig()
       if (!cfg.restaurantId) return res.json({ blocked: false })
-      const result = await db.query('SELECT is_blocked, block_reason FROM restaurants WHERE id = $1', [cfg.restaurantId])
-      const row = result.rows[0]
-      const blocked = row && (row.is_blocked === true || row.is_blocked === 'true')
-      if (!blocked) {
+
+      let row = null
+
+      // Try cloud first for real-time block/license status
+      if (cfg.supabaseUrl && cfg.supabaseKey) {
+        try {
+          const cloudRes = await fetch(
+            `${cfg.supabaseUrl}/rest/v1/restaurants?id=eq.${cfg.restaurantId}&select=is_blocked,block_reason,license_expires_at`,
+            {
+              headers: { apikey: cfg.supabaseKey, Authorization: `Bearer ${cfg.supabaseKey}` },
+              signal: AbortSignal.timeout(5000),
+            }
+          )
+          if (cloudRes.ok) {
+            const rows = await cloudRes.json()
+            if (Array.isArray(rows) && rows.length > 0) row = rows[0]
+          }
+        } catch {} // Offline — fall through to local
+      }
+
+      // Fallback to local DB
+      if (!row) {
+        const db = getDB()
+        const result = await db.query(
+          'SELECT is_blocked, block_reason, license_expires_at FROM restaurants WHERE id = $1',
+          [cfg.restaurantId]
+        )
+        row = result.rows[0]
+      }
+
+      if (!row) return res.json({ blocked: false })
+
+      // Check explicit block
+      const explicitlyBlocked = row.is_blocked === true || row.is_blocked === 'true'
+
+      // Check license expiry
+      const licenseExpired = row.license_expires_at && new Date(row.license_expires_at) < new Date()
+
+      const blocked = explicitlyBlocked || licenseExpired
+      const reason = licenseExpired
+        ? `Лицензия истекла ${new Date(row.license_expires_at).toLocaleDateString('ru')}. Обратитесь к администратору.`
+        : (row.block_reason || 'Заблокировано администратором')
+
+      if (blocked) {
+        isBlocked = true
+        blockReason = reason
+      } else {
         isBlocked = false
         blockReason = ''
       }
-      res.json({ blocked, reason: row?.block_reason || '' })
+
+      res.json({ blocked, reason: blocked ? reason : '' })
     } catch (err) {
       res.json({ blocked: false })
     }

@@ -106,36 +106,54 @@ class SyncEngine {
   }
 
   async checkBlocked() {
+    let row = null
+
+    // Check CLOUD first for real-time status (block can happen any second)
     try {
-      const db = getDB()
-      const result = await db.query(
-        'SELECT is_blocked, block_reason, license_expires_at FROM restaurants WHERE id = $1',
-        [this.restaurantId]
-      )
-      const row = result.rows[0]
-      if (!row) return
-
-      // Check if explicitly blocked
-      const isBlocked = row.is_blocked === true || row.is_blocked === 'true'
-
-      // Check if license expired
-      const isExpired = row.license_expires_at && new Date(row.license_expires_at) < new Date()
-
-      if (isBlocked || isExpired) {
-        const reason = isExpired
-          ? `Лицензия истекла ${new Date(row.license_expires_at).toLocaleDateString('ru')}. Обратитесь к администратору для продления.`
-          : (row.block_reason || '')
-        if (!this.wasBlocked) {
-          this.wasBlocked = true
-          console.log('[sync] License BLOCKED:', reason)
-          if (this.onBlocked) this.onBlocked(reason)
+      const res = await fetch(
+        `${this.supabaseUrl}/rest/v1/restaurants?id=eq.${this.restaurantId}&select=is_blocked,block_reason,license_expires_at`,
+        {
+          headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
+          signal: AbortSignal.timeout(5000),
         }
-      } else if (this.wasBlocked) {
-        this.wasBlocked = false
-        console.log('[sync] License UNBLOCKED')
-        if (this.onUnblocked) this.onUnblocked()
+      )
+      if (res.ok) {
+        const rows = await res.json()
+        if (Array.isArray(rows) && rows.length > 0) row = rows[0]
       }
-    } catch {}
+    } catch {} // Offline — fall through to local
+
+    // Fallback to local DB
+    if (!row) {
+      try {
+        const db = getDB()
+        const result = await db.query(
+          'SELECT is_blocked, block_reason, license_expires_at FROM restaurants WHERE id = $1',
+          [this.restaurantId]
+        )
+        row = result.rows[0]
+      } catch {}
+    }
+
+    if (!row) return
+
+    const isBlocked = row.is_blocked === true || row.is_blocked === 'true'
+    const isExpired = row.license_expires_at && new Date(row.license_expires_at) < new Date()
+
+    if (isBlocked || isExpired) {
+      const reason = isExpired
+        ? `Лицензия истекла ${new Date(row.license_expires_at).toLocaleDateString('ru')}. Обратитесь к администратору для продления.`
+        : (row.block_reason || 'Заблокировано администратором')
+      if (!this.wasBlocked) {
+        this.wasBlocked = true
+        console.log('[sync] License BLOCKED:', reason)
+        if (this.onBlocked) this.onBlocked(reason)
+      }
+    } else if (this.wasBlocked) {
+      this.wasBlocked = false
+      console.log('[sync] License UNBLOCKED')
+      if (this.onUnblocked) this.onUnblocked()
+    }
   }
 
   // ─── PULL: Cloud → Local ──────────────────────────────────────────────────
@@ -419,9 +437,11 @@ class SyncEngine {
 
     // Fast pull of hot tables (every 5 sec) — tables + orders only
     // Keeps table-map responsive (<5 sec latency between devices)
+    // Also checks block/license status every cycle for real-time enforcement.
     setInterval(async () => {
       try {
         await this.pullHotTables()
+        await this.checkBlocked()
       } catch {}
     }, 5000)
 
