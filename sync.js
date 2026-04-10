@@ -357,11 +357,54 @@ class SyncEngine {
 
   // ─── Start sync loop ──────────────────────────────────────────────────────
 
+  // Fast pull of only the most time-sensitive tables (table status, orders).
+  // Keeps table-map and orders page responsive between full pulls.
+  async pullHotTables() {
+    if (this.syncing) return
+    const db = getDB()
+    const HOT = ['tables', 'orders', 'order_items']
+    try {
+      for (const table of HOT) {
+        try {
+          const filterCol = 'restaurant_id'
+          const noRest = ['order_items']
+          const url = noRest.includes(table)
+            ? `${this.supabaseUrl}/rest/v1/${table}?limit=10000`
+            : `${this.supabaseUrl}/rest/v1/${table}?${filterCol}=eq.${this.restaurantId}&limit=10000`
+          const res = await fetch(url, {
+            headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
+            signal: AbortSignal.timeout(5000),
+          })
+          if (!res.ok) continue
+          const rows = await res.json()
+          if (!Array.isArray(rows) || rows.length === 0) continue
+          const columns = Object.keys(rows[0])
+          const hasUpdatedAt = columns.includes('updated_at')
+          for (const row of rows) {
+            const vals = columns.map(c => {
+              const v = row[c]
+              if (v === null || v === undefined) return null
+              if (typeof v === 'object') return JSON.stringify(v)
+              return v
+            })
+            const placeholders = columns.map((_, i) => `$${i + 1}`).join(',')
+            const colList = columns.map(c => `"${c}"`).join(',')
+            const updateList = columns.filter(c => c !== 'id').map(c => `"${c}" = EXCLUDED."${c}"`).join(',')
+            const conflictCondition = hasUpdatedAt ? ` WHERE EXCLUDED.updated_at > "${table}".updated_at` : ''
+            try {
+              await db.query(`INSERT INTO "${table}" (${colList}) VALUES (${placeholders}) ON CONFLICT (id) DO UPDATE SET ${updateList}${conflictCondition}`, vals)
+            } catch { try { await db.query(`INSERT INTO "${table}" (${colList}) VALUES (${placeholders}) ON CONFLICT DO NOTHING`, vals) } catch {} }
+          }
+        } catch {}
+      }
+    } catch {}
+  }
+
   start() {
-    // Initial pull after 3 seconds
+    // Initial full pull after 3 seconds
     setTimeout(() => this.pullFromCloud().catch(() => {}), 3000)
 
-    // Fast push loop (every 10 sec) — sends local changes to cloud quickly
+    // Fast push loop (every 3 sec) — sends local changes to cloud quickly
     setInterval(async () => {
       try {
         const res = await fetch(`${this.supabaseUrl}/rest/v1/restaurants?limit=1`, {
@@ -374,8 +417,15 @@ class SyncEngine {
       } catch {}
     }, 3000)
 
-    // Pull loop (every 30 sec) — pulls cloud changes for multi-device sync.
-    // Faster than the previous 60s so updates from web/other desktops propagate quickly.
+    // Fast pull of hot tables (every 5 sec) — tables + orders only
+    // Keeps table-map responsive (<5 sec latency between devices)
+    setInterval(async () => {
+      try {
+        await this.pullHotTables()
+      } catch {}
+    }, 5000)
+
+    // Full pull (every 30 sec) — all tables including reference data
     setInterval(async () => {
       try {
         const res = await fetch(`${this.supabaseUrl}/rest/v1/restaurants?limit=1`, {
@@ -393,7 +443,7 @@ class SyncEngine {
       }
     }, 30000)
 
-    console.log('[sync] Started (push: 3s, pull: 30s)')
+    console.log('[sync] Started (push: 3s, hot-pull: 5s, full-pull: 30s)')
   }
 }
 
