@@ -809,8 +809,41 @@ h1{font-size:20px;margin-bottom:8px}p{color:#a1a1aa;font-size:14px;margin-bottom
     sync.start(60000)
   }
 
-  // Listen
-  return new Promise((resolve) => {
+  // Kill any zombie process holding the port (previous RestOS that didn't exit cleanly)
+  async function killPortHolder(p) {
+    try {
+      const { execSync } = require('child_process')
+      if (process.platform === 'win32') {
+        // Windows: find PID on port and kill it
+        const out = execSync(`netstat -ano | findstr :${p} | findstr LISTENING`, { encoding: 'utf8', timeout: 3000 }).trim()
+        const lines = out.split('\n').filter(Boolean)
+        const pids = new Set(lines.map(l => l.trim().split(/\s+/).pop()).filter(Boolean))
+        for (const pid of pids) {
+          if (pid !== String(process.pid)) {
+            try { execSync(`taskkill /F /PID ${pid}`, { timeout: 3000 }) } catch {}
+            console.log(`[API] Killed zombie process PID ${pid} on port ${p}`)
+          }
+        }
+      } else {
+        // macOS / Linux: lsof + kill
+        const out = execSync(`lsof -ti :${p}`, { encoding: 'utf8', timeout: 3000 }).trim()
+        const pids = out.split('\n').filter(Boolean)
+        for (const pid of pids) {
+          if (pid !== String(process.pid)) {
+            try { process.kill(Number(pid), 'SIGKILL') } catch {}
+            console.log(`[API] Killed zombie process PID ${pid} on port ${p}`)
+          }
+        }
+      }
+      // Brief pause so the OS releases the port
+      await new Promise(r => setTimeout(r, 500))
+    } catch {
+      // No process on port — good
+    }
+  }
+
+  // Listen — with auto-retry after killing zombie process
+  return new Promise((resolve, reject) => {
     const ip = getLocalIP()
     const server = app.listen(port, '0.0.0.0', () => {
       console.log(`[API] http://localhost:${port}`)
@@ -821,6 +854,29 @@ h1{font-size:20px;margin-bottom:8px}p{color:#a1a1aa;font-size:14px;margin-bottom
         onBlocked: (cb) => { onBlockedCallback = cb },
         onUnblocked: (cb) => { onUnblockedCallback = cb },
       })
+    })
+    server.on('error', async (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`[API] Port ${port} in use — killing zombie process...`)
+        await killPortHolder(port)
+        // Retry once
+        const retry = app.listen(port, '0.0.0.0', () => {
+          console.log(`[API] http://localhost:${port} (after port recovery)`)
+          resolve({
+            port, ip, server: retry,
+            onBlocked: (cb) => { onBlockedCallback = cb },
+            onUnblocked: (cb) => { onUnblockedCallback = cb },
+          })
+        })
+        retry.on('error', (e) => {
+          console.error(`[API] Port ${port} still in use after kill:`, e.message)
+          const { dialog } = require('electron')
+          dialog.showErrorBox('RestOS', `Порт ${port} занят другим приложением.\nЗакройте его и перезапустите RestOS.`)
+          reject(e)
+        })
+      } else {
+        reject(err)
+      }
     })
   })
 }
