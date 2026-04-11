@@ -112,7 +112,7 @@ function createWindow() {
       )
       if (childCount === 0) {
         whiteScreenChecks++
-        if (whiteScreenChecks >= 2) { // 2 consecutive empty checks = white screen
+        if (whiteScreenChecks >= 2) {
           console.log('[white-screen-detector] root empty — reloading')
           mainWindow.reload()
           whiteScreenChecks = 0
@@ -121,7 +121,7 @@ function createWindow() {
         whiteScreenChecks = 0
       }
     } catch {}
-  }, 5000)
+  }, 2000)
 
   // When window comes back from being hidden/minimized, force a refresh of the
   // current page so any stalled timers/SSE reconnect cleanly.
