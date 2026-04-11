@@ -101,6 +101,28 @@ function createWindow() {
     try { mainWindow?.reload() } catch {}
   })
 
+  // White screen detector — periodically check if the renderer DOM is empty.
+  // If React crashed and ErrorBoundary didn't catch it, auto-reload.
+  let whiteScreenChecks = 0
+  setInterval(async () => {
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return
+    try {
+      const childCount = await mainWindow.webContents.executeJavaScript(
+        'document.getElementById("root")?.children?.length ?? -1'
+      )
+      if (childCount === 0) {
+        whiteScreenChecks++
+        if (whiteScreenChecks >= 2) { // 2 consecutive empty checks = white screen
+          console.log('[white-screen-detector] root empty — reloading')
+          mainWindow.reload()
+          whiteScreenChecks = 0
+        }
+      } else {
+        whiteScreenChecks = 0
+      }
+    } catch {}
+  }, 5000)
+
   // When window comes back from being hidden/minimized, force a refresh of the
   // current page so any stalled timers/SSE reconnect cleanly.
   let lastShownAt = Date.now()
