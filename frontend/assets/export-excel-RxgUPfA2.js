@@ -1,0 +1,1 @@
+import{n as e,r as t}from"./xlsx-D8UfRvoy.js";function n(n,r,i,a=`Отчёт`){let o=r.map(e=>e.header),s=n.map(e=>r.map(t=>{let n=e[t.key];return t.format?t.format(n):n??``})),c=e.aoa_to_sheet([o,...s]);c[`!cols`]=r.map(e=>({wch:Math.max(e.header.length,12)}));let l=e.book_new();e.book_append_sheet(l,c,a),t(l,`${i}.xlsx`)}export{n as t};
