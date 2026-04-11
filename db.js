@@ -555,6 +555,14 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS custom_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      type TEXT NOT NULL DEFAULT 'out',
+      restaurant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS sync_meta (
       table_name TEXT PRIMARY KEY,
       last_synced_at TIMESTAMPTZ,

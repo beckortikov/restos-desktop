@@ -8,7 +8,7 @@ const os = require('os')
 const PULL_TABLES = [
   // Reference/config data
   'restaurants', 'users', 'zones', 'menu_items', 'tech_card_lines',
-  'ingredients', 'financial_accounts', 'modifier_groups', 'modifiers',
+  'ingredients', 'financial_accounts', 'custom_categories', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
   'suppliers', 'customers',
   'assets', 'liabilities', 'equity_entries', 'budget_lines',
@@ -34,7 +34,7 @@ const INITIAL_PULL_TABLES = [
 const PUSH_TABLES = [
   // Reference / config (no FK dependencies on other writable tables)
   'zones', 'customers', 'suppliers', 'ingredients',
-  'financial_accounts', 'modifier_groups', 'modifiers',
+  'financial_accounts', 'custom_categories', 'modifier_groups', 'modifiers',
   'semi_finished_types', 'semi_recipe_lines', 'semi_finished_stock',
   'assets', 'liabilities', 'equity_entries', 'budget_lines',
   // Menu (depends on ingredients via tech_card_lines)
