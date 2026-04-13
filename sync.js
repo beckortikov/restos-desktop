@@ -296,6 +296,24 @@ class SyncEngine {
           users: ['email', 'phone'],            // local-only extra fields
         }
 
+        // For child tables that get deleted+re-inserted (tech_card_lines, etc.),
+        // delete cloud rows by parent ID before pushing to prevent duplicates
+        const CHILD_PARENT_MAP = {
+          tech_card_lines: 'menu_item_id',
+        }
+        if (CHILD_PARENT_MAP[table]) {
+          const parentCol = CHILD_PARENT_MAP[table]
+          const parentIds = [...new Set(rows.map(r => r[parentCol]).filter(Boolean))]
+          for (const pid of parentIds) {
+            try {
+              await fetch(`${this.supabaseUrl}/rest/v1/${table}?${parentCol}=eq.${pid}`, {
+                method: 'DELETE',
+                headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
+              })
+            } catch {}
+          }
+        }
+
         // Upsert to Supabase (POST with on_conflict)
         // Supabase PostgREST supports upsert via Prefer: resolution=merge-duplicates
         let allBatchesOk = true
