@@ -1,6 +1,6 @@
 {
   "name": "restos-desktop",
-  "version": "1.4.8",
+  "version": "1.4.9",
   "description": "RestOS Desktop — POS система для ресторанов",
   "main": "main.js",
   "scripts": {
