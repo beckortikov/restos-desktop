@@ -710,6 +710,16 @@ async function initDB() {
     `INSERT INTO equity_entries (id, name, amount, restaurant_id, created_at)
        SELECT id, name, amount, restaurant_id, created_at FROM equity
        WHERE NOT EXISTS (SELECT 1 FROM equity_entries WHERE equity_entries.id = equity.id)`,
+
+    // menu_categories table (for existing installs that don't have it yet)
+    `CREATE TABLE IF NOT EXISTS menu_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      sort_order INTEGER DEFAULT 0,
+      restaurant_id TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )`,
   ]
 
   for (const sql of migrations) {
