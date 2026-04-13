@@ -255,6 +255,15 @@ app.whenReady().then(async () => {
   apiServerRef = server.server
   console.log(`[RestOS] API server running on port ${API_PORT}`)
 
+  // Auto-open firewall port on Windows for waiter connections
+  if (process.platform === 'win32') {
+    const { exec } = require('child_process')
+    exec(`netsh advfirewall firewall show rule name="RestOS API" >nul 2>&1 || netsh advfirewall firewall add rule name="RestOS API" dir=in action=allow protocol=TCP localport=${API_PORT}`, (err) => {
+      if (err) console.log('[firewall] Could not add rule (may need admin):', err.message)
+      else console.log(`[firewall] Port ${API_PORT} opened for waiter connections`)
+    })
+  }
+
   // Handle license blocked/unblocked from sync engine
   server.onBlocked((reason) => {
     console.log('[RestOS] License blocked:', reason)
