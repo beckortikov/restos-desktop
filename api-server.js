@@ -520,6 +520,16 @@ async function startAPIServer(port = 3001) {
     try {
       const db = getDB()
       const { where, params } = parseFilters(req.query)
+      // Record deleted IDs for sync before deleting
+      try {
+        const rows = await db.query(`SELECT id FROM "${table}"${where}`, params)
+        for (const row of rows.rows) {
+          await db.query(
+            `INSERT INTO sync_deletions (table_name, row_id) VALUES ($1, $2)`,
+            [table, row.id]
+          )
+        }
+      } catch {}
       await db.query(`DELETE FROM "${table}"${where}`, params)
       notifyClients(table, 'delete')
       res.json({ count: 1 })

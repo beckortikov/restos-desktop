@@ -201,9 +201,18 @@ class SyncEngine {
             }
           }
 
+          // Load locally deleted IDs to skip during pull
+          let deletedIds = new Set()
+          try {
+            const delRes = await db.query(`SELECT row_id FROM sync_deletions WHERE table_name = $1`, [table])
+            deletedIds = new Set(delRes.rows.map(r => r.row_id))
+          } catch {}
+
           // Upsert each row — but DON'T overwrite if local version is newer (last-write-wins by updated_at)
           const hasUpdatedAt = columns.includes('updated_at')
           for (const row of rows) {
+            // Skip rows that were deleted locally (pending push to cloud)
+            if (deletedIds.has(row.id)) continue
             const vals = columns.map(c => {
               const v = row[c]
               if (v === null || v === undefined) return null
@@ -250,6 +259,23 @@ class SyncEngine {
   async pushToCloud() {
     const db = getDB()
     console.log('[sync] Pushing to cloud...')
+
+    // Push pending deletions to cloud first
+    try {
+      const delResult = await db.query(`SELECT id, table_name, row_id FROM sync_deletions ORDER BY id`)
+      for (const del of delResult.rows) {
+        try {
+          const res = await fetch(`${this.supabaseUrl}/rest/v1/${del.table_name}?id=eq.${del.row_id}`, {
+            method: 'DELETE',
+            headers: { apikey: this.supabaseKey, Authorization: `Bearer ${this.supabaseKey}` },
+          })
+          if (res.ok || res.status === 404) {
+            await db.query(`DELETE FROM sync_deletions WHERE id = $1`, [del.id])
+            console.log(`  [push-delete] ${del.table_name}/${del.row_id} → deleted from cloud`)
+          }
+        } catch {}
+      }
+    } catch {}
 
     for (const table of PUSH_TABLES) {
       try {

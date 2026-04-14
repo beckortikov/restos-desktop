@@ -572,6 +572,13 @@ async function initDB() {
       created_at TIMESTAMPTZ DEFAULT now()
     );
 
+    CREATE TABLE IF NOT EXISTS sync_deletions (
+      id SERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      deleted_at TIMESTAMPTZ DEFAULT now()
+    );
+
     CREATE TABLE IF NOT EXISTS sync_meta (
       table_name TEXT PRIMARY KEY,
       last_synced_at TIMESTAMPTZ,
@@ -719,6 +726,14 @@ async function initDB() {
       restaurant_id TEXT,
       created_at TIMESTAMPTZ DEFAULT now(),
       updated_at TIMESTAMPTZ DEFAULT now()
+    )`,
+
+    // sync_deletions table for tracking deletes
+    `CREATE TABLE IF NOT EXISTS sync_deletions (
+      id SERIAL PRIMARY KEY,
+      table_name TEXT NOT NULL,
+      row_id TEXT NOT NULL,
+      deleted_at TIMESTAMPTZ DEFAULT now()
     )`,
   ]
 
