@@ -244,6 +244,23 @@ class SyncEngine {
         }
       }
 
+      // Clean up orphaned child records (parent deleted in cloud but children remain locally)
+      const PARENT_CHILD = [
+        { child: 'order_items', parent: 'orders', fk: 'order_id' },
+        { child: 'order_item_modifiers', parent: 'order_items', fk: 'order_item_id' },
+        { child: 'tech_card_lines', parent: 'menu_items', fk: 'menu_item_id' },
+        { child: 'stock_receipt_lines', parent: 'stock_receipts', fk: 'receipt_id' },
+        { child: 'stock_writeoff_lines', parent: 'stock_writeoffs', fk: 'writeoff_id' },
+        { child: 'cash_shift_operations', parent: 'cash_shifts', fk: 'shift_id' },
+        { child: 'order_voids', parent: 'orders', fk: 'order_id' },
+        { child: 'order_splits', parent: 'orders', fk: 'order_id' },
+      ]
+      for (const { child, parent, fk } of PARENT_CHILD) {
+        try {
+          await db.query(`DELETE FROM "${child}" WHERE "${fk}" NOT IN (SELECT id FROM "${parent}")`)
+        } catch {}
+      }
+
       // Update last pull timestamp
       await db.query(`INSERT INTO sync_meta (table_name, last_pulled_at) VALUES ('_all', now()) ON CONFLICT (table_name) DO UPDATE SET last_pulled_at = now()`)
 
@@ -397,18 +414,22 @@ class SyncEngine {
               break
             }
           }
-          if (!batchOk) allBatchesOk = false
+          if (batchOk) {
+            // Update sync timestamp after EACH successful batch (not after all)
+            // This prevents re-sending already-pushed rows if a later batch fails
+            await db.query(
+              `INSERT INTO sync_meta (table_name, last_synced_at) VALUES ($1, now()) ON CONFLICT (table_name) DO UPDATE SET last_synced_at = now()`,
+              [table]
+            )
+          } else {
+            allBatchesOk = false
+          }
         }
 
-        // Update sync timestamp ONLY if all batches succeeded
         if (allBatchesOk) {
-          await db.query(
-            `INSERT INTO sync_meta (table_name, last_synced_at) VALUES ($1, now()) ON CONFLICT (table_name) DO UPDATE SET last_synced_at = now()`,
-            [table]
-          )
           console.log(`  [push] ${table}: ${rows.length} rows ✓`)
         } else {
-          console.log(`  [push] ${table}: failed, will retry`)
+          console.log(`  [push] ${table}: partial push, will retry remaining`)
         }
       } catch (err) {
         console.error(`  [push] ${table} error:`, err.message)

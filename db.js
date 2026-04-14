@@ -728,6 +728,13 @@ async function initDB() {
       updated_at TIMESTAMPTZ DEFAULT now()
     )`,
 
+    // Add updated_at to child tables for conflict detection
+    `ALTER TABLE order_items ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE order_item_modifiers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE stock_receipt_lines ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE stock_writeoff_lines ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+    `ALTER TABLE cash_shift_operations ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now()`,
+
     // sync_deletions table for tracking deletes
     `CREATE TABLE IF NOT EXISTS sync_deletions (
       id SERIAL PRIMARY KEY,
